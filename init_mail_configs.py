@@ -28,7 +28,7 @@ class MailConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     smtp_server = db.Column(db.String(100), nullable=False)
-    smtp_port = db.Column(db.Integer, nullable=False, default=587)
+    smtp_port = db.Column(db.Integer, nullable=False, default=465)
     username = db.Column(db.String(100), nullable=False)
     password = db.Column(db.String(200), nullable=False)
     use_tls = db.Column(db.Boolean, default=True)
@@ -68,7 +68,7 @@ def init_mail_configs():
             {
                 'name': 'QQ邮箱示例1',
                 'smtp_server': 'smtp.qq.com',
-                'smtp_port': 587,
+                'smtp_port': 465,
                 'username': 'your-email1@qq.com',
                 'password': 'your-app-password1',
                 'use_tls': True,
@@ -78,7 +78,7 @@ def init_mail_configs():
             {
                 'name': 'QQ邮箱示例2',
                 'smtp_server': 'smtp.qq.com',
-                'smtp_port': 587,
+                'smtp_port': 465,
                 'username': 'your-email2@qq.com',
                 'password': 'your-app-password2',
                 'use_tls': True,
@@ -86,19 +86,9 @@ def init_mail_configs():
                 'is_active': False
             },
             {
-                'name': '163邮箱示例',
-                'smtp_server': 'smtp.163.com',
-                'smtp_port': 587,
-                'username': 'your-email@163.com',
-                'password': 'your-app-password',
-                'use_tls': True,
-                'daily_limit': 80,
-                'is_active': False
-            },
-            {
                 'name': 'Gmail示例',
                 'smtp_server': 'smtp.gmail.com',
-                'smtp_port': 587,
+                'smtp_port': 465,
                 'username': 'your-email@gmail.com',
                 'password': 'your-app-password',
                 'use_tls': True,
@@ -144,8 +134,8 @@ def init_mail_configs():
             print("5. 测试邮箱配置确保能正常发送")
             print("\\n注意：")
             print("- QQ邮箱需要开启SMTP服务并使用授权码")
-            print("- 163邮箱需要开启客户端授权密码")
             print("- Gmail需要使用应用专用密码")
+            print("- 其他邮箱请查阅服务商SMTP设置文档")
             
         except Exception as e:
             db.session.rollback()

@@ -12,7 +12,7 @@ PubMed Literature Push Web Application - v2.0.0
 - 定时推送调度
 """
 
-from flask import Flask, render_template_string, request, flash, redirect, url_for, jsonify, send_from_directory
+from flask import Flask, render_template_string, request, flash, redirect, url_for, jsonify, send_from_directory, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -32,6 +32,7 @@ import csv
 import os
 import time
 import threading
+import queue
 from datetime import datetime, timedelta
 
 class JournalDataCache:
@@ -611,7 +612,7 @@ class MailConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)  # 配置名称
     smtp_server = db.Column(db.String(100), nullable=False)
-    smtp_port = db.Column(db.Integer, nullable=False, default=587)
+    smtp_port = db.Column(db.Integer, nullable=False, default=465)
     username = db.Column(db.String(100), nullable=False)
     password = db.Column(db.String(200), nullable=False)
     use_tls = db.Column(db.Boolean, default=True)
@@ -2825,11 +2826,154 @@ def get_ai_prompts_template():
 # 全局AI服务实例
 ai_service = AIService()
 
+# PubMed API全局限流器
+
+class PubMedRateLimiter:
+    """PubMed API全局限流器，确保整个服务器的请求频率不超过NCBI限制"""
+    
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._request_queue = queue.Queue()
+        self._last_request_time = 0
+        self._worker_thread = None
+        self._stop_worker = False
+        # 缓存API Key状态和间隔时间，避免在工作线程中访问数据库
+        self._api_key_status = False
+        self._min_interval = 0.5  # 默认无API Key的间隔
+        self._last_check_time = 0
+        self._check_interval = 60  # 每60秒检查一次API Key状态
+        self._start_worker()
+    
+    def _update_api_key_status(self):
+        """更新API Key状态（在主线程中调用）"""
+        try:
+            with app.app_context():
+                api_key = SystemSetting.get_setting('pubmed_api_key', '').strip()
+                has_api_key = bool(api_key)
+                
+                with self._lock:
+                    self._api_key_status = has_api_key
+                    # 根据API Key状态设置限流参数（增加缓冲）
+                    if has_api_key:
+                        self._min_interval = 0.12  # 有API Key：10请求/秒理论值0.1秒，实际使用0.12秒缓冲
+                    else:
+                        self._min_interval = 0.5   # 无API Key：3请求/秒理论值0.33秒，实际使用0.5秒缓冲
+                    self._last_check_time = time.time()
+        except Exception as e:
+            # 如果无法访问数据库，使用保守设置
+            with self._lock:
+                self._api_key_status = False
+                self._min_interval = 0.5
+    
+    def _start_worker(self):
+        """启动工作线程处理请求队列"""
+        def worker():
+            while not self._stop_worker:
+                try:
+                    # 从队列获取请求任务，超时1秒
+                    task = self._request_queue.get(timeout=1)
+                    if task is None:  # 停止信号
+                        break
+                    
+                    request_func, future = task
+                    
+                    # 执行限流控制
+                    self._wait_if_needed()
+                    
+                    # 执行实际请求
+                    try:
+                        result = request_func()
+                        future.set_result(result)
+                    except Exception as e:
+                        future.set_exception(e)
+                    finally:
+                        self._request_queue.task_done()
+                        
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    print(f"限流器工作线程错误: {e}")
+        
+        self._worker_thread = threading.Thread(target=worker, daemon=True)
+        self._worker_thread.start()
+    
+    def _wait_if_needed(self):
+        """根据缓存的API Key状态进行延迟控制"""
+        with self._lock:
+            # 检查是否需要更新API Key状态
+            current_time = time.time()
+            if current_time - self._last_check_time > self._check_interval:
+                # 在工作线程中不能直接访问数据库，跳过更新
+                # 实际更新会在execute_request方法中进行
+                pass
+            
+            # 使用缓存的间隔时间
+            min_interval = self._min_interval
+            time_since_last = current_time - self._last_request_time
+            
+            if time_since_last < min_interval:
+                sleep_time = min_interval - time_since_last
+                time.sleep(sleep_time)
+            
+            self._last_request_time = time.time()
+    
+    def execute_request(self, request_func):
+        """
+        执行限流的请求
+        
+        Args:
+            request_func: 要执行的请求函数
+            
+        Returns:
+            请求结果
+        """
+        import concurrent.futures
+        
+        # 在主线程中检查并更新API Key状态
+        current_time = time.time()
+        if current_time - self._last_check_time > self._check_interval:
+            self._update_api_key_status()
+        
+        # 创建Future对象用于获取结果
+        future = concurrent.futures.Future()
+        
+        # 将请求任务加入队列
+        self._request_queue.put((request_func, future))
+        
+        # 等待结果
+        return future.result()
+    
+    def shutdown(self):
+        """关闭限流器"""
+        self._stop_worker = True
+        self._request_queue.put(None)  # 发送停止信号
+        if self._worker_thread:
+            self._worker_thread.join()
+
+# 全局限流器实例
+pubmed_rate_limiter = PubMedRateLimiter()
+
+# 在应用上下文中初始化API Key状态
+def init_rate_limiter():
+    """初始化限流器的API Key状态"""
+    try:
+        pubmed_rate_limiter._update_api_key_status()
+    except Exception as e:
+        # 如果初始化失败，使用默认保守设置
+        print(f"限流器初始化警告: {e}")
+        pass
+
 # PubMed API完整版
 class PubMedAPI:
+    # 文章类型过滤常量 - 使用正向选择避免负向过滤的语法问题
+    ARTICLE_TYPE_FILTER = '("Journal Article"[PT] OR "Review"[PT] OR "Case Reports"[PT] OR "Clinical Trial"[PT] OR "Randomized Controlled Trial"[PT] OR "Meta-Analysis"[PT] OR "Systematic Review"[PT])'
+    
     def __init__(self):
         self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-        self.api_key = None  # 可选，提高请求限制
+        # 从系统配置获取API Key
+        api_key = SystemSetting.get_setting('pubmed_api_key', '')
+        self.api_key = api_key if api_key.strip() else None
+        # 不再需要request_delay，使用全局限流器
     
     
     def get_journal_quality(self, issn, eissn=None):
@@ -2889,14 +3033,42 @@ class PubMedAPI:
         # 首先使用AI优化关键词
         original_keywords = keywords
         if isinstance(keywords, str):
-            optimized_keywords = ai_service.build_pubmed_query(keywords)
+            # AI查询构建器防重复调用机制
+            import time
+            current_time = time.time()
+            ai_cache_key = f'ai_query_{keywords}'
+            
+            # 检查缓存中是否有最近的结果
+            if hasattr(self, '_ai_query_cache'):
+                cache_data = self._ai_query_cache.get(ai_cache_key)
+                if cache_data and current_time - cache_data['timestamp'] < 300:  # 300秒内复用结果
+                    app.logger.info(f"使用缓存的AI检索式: {keywords} -> {cache_data['query'][:50]}...")
+                    optimized_keywords = cache_data['query']
+                else:
+                    # 缓存过期，重新生成
+                    optimized_keywords = ai_service.build_pubmed_query(keywords)
+                    if not hasattr(self, '_ai_query_cache'):
+                        self._ai_query_cache = {}
+                    self._ai_query_cache[ai_cache_key] = {
+                        'query': optimized_keywords,
+                        'timestamp': current_time
+                    }
+            else:
+                # 首次调用，初始化缓存
+                optimized_keywords = ai_service.build_pubmed_query(keywords)
+                self._ai_query_cache = {
+                    ai_cache_key: {
+                        'query': optimized_keywords,
+                        'timestamp': current_time
+                    }
+                }
             # 如果AI优化成功（返回的不是原始关键词），直接使用优化后的完整检索式
             if optimized_keywords != keywords and optimized_keywords.strip():
-                # AI返回的是完整的检索式，但需要添加日期限制
+                # AI返回的是完整的检索式，但需要添加日期限制和文章类型过滤
                 end_date = beijing_now()
                 start_date = end_date - timedelta(days=days_back)
                 date_range = f'("{start_date.strftime("%Y/%m/%d")}"[Date - Publication] : "{end_date.strftime("%Y/%m/%d")}"[Date - Publication])'
-                final_query = f'({optimized_keywords}) AND {date_range}'
+                final_query = f'{optimized_keywords} AND {date_range} AND {self.ARTICLE_TYPE_FILTER}'
                 
                 # 直接使用AI优化的检索式进行搜索
                 esearch_url = f"{self.base_url}esearch.fcgi"
@@ -2917,7 +3089,11 @@ class PubMedAPI:
                     params['api_key'] = self.api_key
                 
                 try:
-                    response = requests.get(esearch_url, params=params, timeout=30)
+                    # 使用全局限流器执行请求
+                    def make_request():
+                        return requests.get(esearch_url, params=params, timeout=30)
+                    
+                    response = pubmed_rate_limiter.execute_request(make_request)
                     response.raise_for_status()
                     
                     # 解析JSON响应
@@ -2946,12 +3122,12 @@ class PubMedAPI:
         # 组合关键词（固定使用AND逻辑）
         search_query = ' AND '.join(query_terms)
         
-        # 添加日期限制
+        # 添加日期限制和文章类型过滤
         end_date = beijing_now()
         start_date = end_date - timedelta(days=days_back)
         date_range = f'("{start_date.strftime("%Y/%m/%d")}"[Date - Publication] : "{end_date.strftime("%Y/%m/%d")}"[Date - Publication])'
         
-        final_query = f'({search_query}) AND {date_range}'
+        final_query = f'({search_query}) AND {date_range} AND {self.ARTICLE_TYPE_FILTER}'
         
         # 构建请求URL
         esearch_url = f"{self.base_url}esearch.fcgi"
@@ -2972,7 +3148,11 @@ class PubMedAPI:
             params['api_key'] = self.api_key
         
         try:
-            response = requests.get(esearch_url, params=params, timeout=30)
+            # 使用全局限流器执行请求
+            def make_request():
+                return requests.get(esearch_url, params=params, timeout=30)
+            
+            response = pubmed_rate_limiter.execute_request(make_request)
             response.raise_for_status()
             
             # 解析JSON响应
@@ -3022,16 +3202,16 @@ class PubMedAPI:
                 params['api_key'] = self.api_key
             
             try:
-                response = requests.get(efetch_url, params=params, timeout=60)
+                # 使用全局限流器执行请求
+                def make_request():
+                    return requests.get(efetch_url, params=params, timeout=60)
+                
+                response = pubmed_rate_limiter.execute_request(make_request)
                 response.raise_for_status()
                 
                 batch_articles = self._parse_issn_only_xml(response.content)
                 all_articles.extend(batch_articles)
                 
-                # 添加延迟以避免请求过频
-                if i + batch_size < len(pmids):
-                    time.sleep(0.3)  # 减少延迟时间
-                    
             except Exception as e:
                 print(f"获取第{i//batch_size + 1}批ISSN信息错误: {e}")
                 continue
@@ -3110,16 +3290,16 @@ class PubMedAPI:
                 params['api_key'] = self.api_key
             
             try:
-                response = requests.get(efetch_url, params=params, timeout=60)
+                # 使用全局限流器执行请求
+                def make_request():
+                    return requests.get(efetch_url, params=params, timeout=60)
+                
+                response = pubmed_rate_limiter.execute_request(make_request)
                 response.raise_for_status()
                 
                 batch_articles = self._parse_article_xml(response.content)
                 all_articles.extend(batch_articles)
                 
-                # 添加延迟以避免请求过频
-                if i + batch_size < len(pmids):
-                    time.sleep(0.5)
-                    
             except Exception as e:
                 print(f"获取第{i//batch_size + 1}批文章详情错误: {e}")
                 continue
@@ -3338,9 +3518,6 @@ class PubMedAPI:
         if not pmids:
             return []
         
-        # 添加延迟以避免请求过频
-        time.sleep(0.5)
-        
         # 第二步：获取详细信息
         articles = self.get_article_details(pmids)
         
@@ -3373,9 +3550,6 @@ class PubMedAPI:
                 'filtered_count': 0,
                 'excluded_no_issn': 0
             }
-        
-        # 添加延迟以避免请求过频
-        time.sleep(0.5)
         
         # 第二步：获取详细信息
         articles = self.get_article_details(pmids)
@@ -3484,9 +3658,6 @@ class PubMedAPI:
                 'no_filter_applied': True      # 标记无筛选条件
             }
         
-        # 添加延迟以避免请求过频
-        time.sleep(0.5)
-        
         # 第二步：只获取ISSN信息用于筛选（轻量级）
         articles = self.get_article_issn_only(pmids)
         
@@ -3572,6 +3743,21 @@ def index():
             keywords = request.form.get('keywords', '').strip()
             
             if keywords:
+                # 防止重复提交：检查是否在短时间内有相同的搜索请求
+                import time
+                current_time = time.time()
+                session_key = f'search_{keywords}_{current_user.id}'
+                last_search_time = session.get(session_key, 0)
+                
+                # 调整时间窗口到5秒，防止重复搜索请求
+                if current_time - last_search_time < 5:
+                    app.logger.warning(f"重复搜索请求被拒绝: {keywords} (用户: {current_user.email}, 间隔: {current_time - last_search_time:.1f}秒)")
+                    flash('请不要重复提交搜索请求', 'warning')
+                    return render_template_string(get_index_template(), search_results=search_results)
+                
+                # 记录本次搜索时间
+                session[session_key] = current_time
+                app.logger.info(f"开始处理搜索请求: {keywords} (用户: {current_user.email})")
                 # 从系统设置获取最大结果数
                 max_results = int(SystemSetting.get_setting('pubmed_max_results', '200'))
                 
@@ -3606,9 +3792,8 @@ def index():
                     if zky_top_only:
                         zky_filter['top'] = True
                 
-                # 获取用户的推送频率设置，用于确定搜索天数
-                default_frequency = SystemSetting.get_setting('push_frequency', 'daily')
-                search_days = get_search_days_by_frequency(default_frequency)
+                # 搜索统计固定使用30天
+                search_days = 30
                 
                 # 使用统计搜索方法（只返回数量，不获取详细信息）
                 api = PubMedAPI()
@@ -3773,7 +3958,7 @@ def get_index_template():
                                 </div>
                                 
                                 
-                                <button type="submit" class="btn btn-primary w-100">
+                                <button type="submit" class="btn btn-primary w-100" onclick="disableSearchButton(this)">
                                     <i class="fas fa-search"></i> 搜索文献
                                 </button>
                             </form>
@@ -3973,6 +4158,16 @@ def get_index_template():
         <!-- JavaScript -->
         <script>
         // 删除搜索模式切换功能，因为现在只有一种搜索模式
+        
+        // 防止重复提交搜索表单
+        function disableSearchButton(button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 搜索中...';
+            // 避免禁用按钮导致表单无法提交
+            setTimeout(function() {
+                button.closest('form').submit();
+            }, 100);
+        }
         </script>
         <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
     </body>
@@ -7160,8 +7355,8 @@ def admin_system():
             # 保存PubMed配置
             if 'pubmed_config' in request.form:
                 SystemSetting.set_setting('pubmed_max_results', request.form.get('pubmed_max_results', '20'), 'PubMed每次最大检索数量', 'pubmed')
-                SystemSetting.set_setting('pubmed_request_delay', request.form.get('pubmed_request_delay', '1'), 'PubMed请求间隔(秒)', 'pubmed')
                 SystemSetting.set_setting('pubmed_timeout', request.form.get('pubmed_timeout', '30'), 'PubMed请求超时时间(秒)', 'pubmed')
+                SystemSetting.set_setting('pubmed_api_key', request.form.get('pubmed_api_key', ''), 'PubMed API Key', 'pubmed')
                 flash('PubMed配置已保存', 'admin')
             
             # 保存推送配置  
@@ -7200,8 +7395,8 @@ def admin_system():
     settings = {
         # PubMed配置
         'pubmed_max_results': SystemSetting.get_setting('pubmed_max_results', '200'),
-        'pubmed_request_delay': SystemSetting.get_setting('pubmed_request_delay', '5'),
         'pubmed_timeout': SystemSetting.get_setting('pubmed_timeout', '10'),
+        'pubmed_api_key': SystemSetting.get_setting('pubmed_api_key', ''),
         
         # 推送配置
         'push_daily_time': SystemSetting.get_setting('push_daily_time', '09:00'),
@@ -7281,16 +7476,16 @@ def admin_system():
                                     <div class="form-text">单次搜索返回的最大文章数量 (1-10000)</div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">请求间隔 (秒)</label>
-                                    <input type="number" class="form-control" name="pubmed_request_delay" 
-                                           value="{{ settings.pubmed_request_delay }}" min="0.5" max="10" step="0.5" required>
-                                    <div class="form-text">连续请求之间的延迟时间</div>
-                                </div>
-                                <div class="mb-3">
                                     <label class="form-label">请求超时 (秒)</label>
                                     <input type="number" class="form-control" name="pubmed_timeout" 
                                            value="{{ settings.pubmed_timeout }}" min="10" max="120" required>
                                     <div class="form-text">单个请求的最大等待时间</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">API Key (可选)</label>
+                                    <input type="text" class="form-control" name="pubmed_api_key" 
+                                           value="{{ settings.pubmed_api_key }}" placeholder="留空使用默认限制">
+                                    <div class="form-text">NCBI API Key，可提高请求限制从3/秒到10/秒</div>
                                 </div>
                                 <button type="submit" class="btn btn-primary">
                                     <i class="fas fa-save"></i> 保存PubMed配置
@@ -7842,7 +8037,7 @@ def admin_mail_add():
             config = MailConfig(
                 name=request.form.get('name'),
                 smtp_server=request.form.get('smtp_server'),
-                smtp_port=int(request.form.get('smtp_port', 587)),
+                smtp_port=int(request.form.get('smtp_port', 465)),
                 username=request.form.get('username'),
                 password=request.form.get('password'),
                 use_tls=bool(request.form.get('use_tls')),
@@ -7920,8 +8115,8 @@ def admin_mail_add():
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">SMTP端口 *</label>
-                                    <input type="number" class="form-control" name="smtp_port" value="587" required>
-                                    <div class="form-text">通常为587(TLS)或465(SSL)</div>
+                                    <input type="number" class="form-control" name="smtp_port" value="465" required>
+                                    <div class="form-text">通常为465(SSL)或587(TLS)，推荐465</div>
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">邮箱地址 *</label>
@@ -7970,19 +8165,19 @@ def admin_mail_add():
                         <div class="col-md-4">
                             <strong>QQ邮箱</strong><br>
                             服务器: smtp.qq.com<br>
-                            端口: 587 (TLS)<br>
+                            端口: 465 (SSL) 或 587 (TLS)<br>
                             <small class="text-muted">需要开启SMTP服务并使用授权码</small>
                         </div>
                         <div class="col-md-4">
-                            <strong>163邮箱</strong><br>
-                            服务器: smtp.163.com<br>
-                            端口: 587 (TLS)<br>
-                            <small class="text-muted">需要开启客户端授权</small>
+                            <strong>其他邮箱</strong><br>
+                            请查阅邮箱服务商<br>
+                            的SMTP设置文档<br>
+                            <small class="text-muted">常用端口: 465(SSL) 或 587(TLS)，推荐465</small>
                         </div>
                         <div class="col-md-4">
                             <strong>Gmail</strong><br>
                             服务器: smtp.gmail.com<br>
-                            端口: 587 (TLS)<br>
+                            端口: 465 (SSL) 或 587 (TLS)<br>
                             <small class="text-muted">需要使用应用专用密码</small>
                         </div>
                     </div>
@@ -8004,7 +8199,7 @@ def admin_mail_edit(config_id):
         try:
             config.name = request.form.get('name')
             config.smtp_server = request.form.get('smtp_server')
-            config.smtp_port = int(request.form.get('smtp_port', 587))
+            config.smtp_port = int(request.form.get('smtp_port', 465))
             config.username = request.form.get('username')
             if request.form.get('password'):  # 只有输入新密码时才更新
                 config.password = request.form.get('password')
@@ -8214,9 +8409,20 @@ def admin_mail_test(config_id):
         app.config['MAIL_PORT'] = config.smtp_port
         app.config['MAIL_USERNAME'] = config.username
         app.config['MAIL_PASSWORD'] = config.password
-        app.config['MAIL_USE_TLS'] = config.use_tls
-        # 465端口使用SSL，587端口使用TLS
-        app.config['MAIL_USE_SSL'] = (config.smtp_port == 465)
+        
+        # 根据端口设置正确的加密方式（与发送邮件逻辑保持一致）
+        if config.smtp_port == 465:
+            # 465端口使用SSL，不使用TLS
+            app.config['MAIL_USE_SSL'] = True
+            app.config['MAIL_USE_TLS'] = False
+        elif config.smtp_port == 587:
+            # 587端口使用TLS，不使用SSL
+            app.config['MAIL_USE_SSL'] = False
+            app.config['MAIL_USE_TLS'] = True
+        else:
+            # 其他端口按配置设置
+            app.config['MAIL_USE_TLS'] = config.use_tls
+            app.config['MAIL_USE_SSL'] = False
         
         mail = Mail(app)
         
@@ -8229,12 +8435,30 @@ def admin_mail_test(config_id):
         
         mail.send(msg)
         
-        log_activity('INFO', 'admin', f'管理员 {current_user.email} 测试邮箱配置: {config.name}', current_user.id, request.remote_addr)
-        flash(f'测试邮件已发送到 {current_user.email}，请检查邮箱', 'admin')
+        # 标记配置为已测试
+        config.last_used = beijing_now()
+        db.session.commit()
+        
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 测试邮箱配置成功: {config.name}', current_user.id, request.remote_addr)
+        flash(f'测试邮件已发送到 {current_user.email}，请检查邮箱', 'success')
         
     except Exception as e:
-        log_activity('ERROR', 'admin', f'邮箱配置测试失败: {config.name} - {str(e)}', current_user.id, request.remote_addr)
-        flash(f'测试失败: {str(e)}', 'admin')
+        error_msg = str(e)
+        log_activity('ERROR', 'admin', f'邮箱配置测试失败: {config.name} - {error_msg}', current_user.id, request.remote_addr)
+        
+        # 提供详细的错误诊断信息
+        if 'STARTTLS extension not supported' in error_msg:
+            flash(f'STARTTLS错误：服务器 {config.smtp_server}:{config.smtp_port} 不支持STARTTLS。解决方案：1) 尝试端口465(SSL) 2) 检查服务器地址 3) 确认邮箱服务商设置', 'error')
+        elif 'Connection unexpectedly closed' in error_msg:
+            flash(f'连接意外关闭：1) 检查用户名密码 2) 确认邮箱已开启SMTP 3) 尝试不同端口(25/465/587) 4) 检查网络连接', 'error')
+        elif 'Authentication failed' in error_msg or 'Login failed' in error_msg:
+            flash(f'认证失败：请检查用户名和密码（应用专用密码）是否正确', 'error')
+        elif 'Connection refused' in error_msg or 'timeout' in error_msg.lower():
+            flash(f'连接失败：无法连接到 {config.smtp_server}:{config.smtp_port}。请检查服务器地址和端口', 'error')
+        elif 'SSL' in error_msg and config.smtp_port == 587:
+            flash(f'SSL/TLS错误：端口587应使用STARTTLS，尝试检查服务器是否支持', 'error')
+        else:
+            flash(f'邮件测试失败: {error_msg}', 'error')
     
     return redirect(url_for('admin_mail'))
 
@@ -9081,8 +9305,8 @@ if __name__ == '__main__':
         if not SystemSetting.query.first():
             default_settings = [
                 ('pubmed_max_results', '10000', 'PubMed每次最大检索数量', 'pubmed'),
-                ('pubmed_request_delay', '5', 'PubMed请求间隔(秒)', 'pubmed'),
                 ('pubmed_timeout', '10', 'PubMed请求超时时间(秒)', 'pubmed'),
+                ('pubmed_api_key', '', 'PubMed API Key', 'pubmed'),
                 ('push_frequency', 'daily', '默认推送频率', 'push'),
                 ('push_time', '09:00', '默认推送时间', 'push'),
                 ('push_day', 'monday', '默认每周推送日(周几)', 'push'),
@@ -9198,6 +9422,10 @@ if __name__ == '__main__':
         # 启动定时推送任务
         init_scheduler()
         print("定时推送任务已启动")
+        
+        # 初始化限流器
+        init_rate_limiter()
+        print("PubMed API限流器已初始化")
         
         try:
             debug_mode = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'

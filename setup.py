@@ -117,6 +117,8 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 doi VARCHAR(100),
                 pubmed_url VARCHAR(200),
                 keywords TEXT,
+                issn VARCHAR(20),
+                eissn VARCHAR(20),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -169,7 +171,7 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name VARCHAR(100) NOT NULL,
                 smtp_server VARCHAR(100) NOT NULL,
-                smtp_port INTEGER NOT NULL DEFAULT 587,
+                smtp_port INTEGER NOT NULL DEFAULT 465,
                 username VARCHAR(100) NOT NULL,
                 password VARCHAR(200) NOT NULL,
                 use_tls BOOLEAN DEFAULT 1,
@@ -256,8 +258,8 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
         # 插入默认系统设置
         default_settings = [
             ('pubmed_max_results', '100', 'PubMed每次最大检索数量', 'pubmed'),
-            ('pubmed_request_delay', '5', 'PubMed请求间隔(秒)', 'pubmed'),
             ('pubmed_timeout', '30', 'PubMed请求超时时间(秒)', 'pubmed'),
+            ('pubmed_api_key', '', 'PubMed API Key', 'pubmed'),
             ('push_daily_time', '09:00', '默认每日推送时间', 'push'),
             ('push_max_articles', '50', '每次推送最大文章数', 'push'),
             ('push_enabled', 'true', '启用自动推送', 'push'),

@@ -1,11 +1,9 @@
-name: Docker Build and Push
+name: Simple Docker Build
 
 on:
   push:
     branches: [ main, develop ]
     tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
 
 env:
   REGISTRY: ghcr.io
@@ -17,8 +15,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      security-events: write
-      actions: read
 
     steps:
     - name: Checkout repository
@@ -53,20 +49,6 @@ jobs:
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
 
-    # 安全扫描 (可选，需要适当权限)
-    # - name: Run security scan
-    #   uses: aquasecurity/trivy-action@master
-    #   with:
-    #     image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-    #     format: 'sarif'
-    #     output: 'trivy-results.sarif'
-    #   continue-on-error: true
-
-    # - name: Upload security scan results
-    #   uses: github/codeql-action/upload-sarif@v3
-    #   if: always() && hashFiles('trivy-results.sarif') != ''
-    #   with:
-    #     sarif_file: 'trivy-results.sarif'
+    - name: Image digest
+      run: echo ${{ steps.build.outputs.digest }}

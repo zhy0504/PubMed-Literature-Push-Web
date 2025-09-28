@@ -3855,15 +3855,13 @@ def sync_env_to_database():
             if openai_api_key:
                 print(f"[同步] 检测到 OPENAI_API_KEY")
                 # 检查是否已存在活跃的 OpenAI 提供商
-                existing_provider = AISetting.query.filter_by(provider='openai', is_active=True).first()
+                existing_provider = AISetting.query.filter_by(provider_name='OpenAI', is_active=True).first()
                 
                 if not existing_provider:
                     # 如果没有活跃的 OpenAI 配置，创建一个
                     new_provider = AISetting(
-                        name='OpenAI (从环境变量)',
-                        provider='openai',
-                        api_base=openai_api_base,
-                        model='gpt-3.5-turbo',
+                        provider_name='OpenAI',
+                        base_url=openai_api_base,
                         is_active=True
                     )
                     new_provider.set_api_key(openai_api_key)

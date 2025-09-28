@@ -84,10 +84,14 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 push_time VARCHAR(10) DEFAULT '09:00',
                 push_frequency VARCHAR(20) DEFAULT 'daily',
                 push_day VARCHAR(10) DEFAULT 'monday',
+                push_month_day INTEGER DEFAULT 1,
                 max_articles INTEGER DEFAULT 10,
                 is_admin BOOLEAN DEFAULT 0,
                 is_active BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_push TIMESTAMP,
+                max_subscriptions INTEGER DEFAULT 10,
+                allowed_frequencies VARCHAR(100) DEFAULT 'daily,weekly,monthly'
             )
         ''')
         

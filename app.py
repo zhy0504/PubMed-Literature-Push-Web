@@ -3822,6 +3822,13 @@ def sync_env_to_database():
     print("[同步] 开始执行环境变量同步...")
     try:
         with app.app_context():
+            # 检查数据库表是否存在
+            try:
+                db.engine.execute('SELECT 1 FROM system_setting LIMIT 1')
+            except Exception as e:
+                print(f"[同步] 数据库表尚未创建，跳过同步: {e}")
+                return
+            
             # 同步 PubMed 相关配置
             pubmed_settings = {
                 'pubmed_api_key': os.environ.get('PUBMED_API_KEY'),

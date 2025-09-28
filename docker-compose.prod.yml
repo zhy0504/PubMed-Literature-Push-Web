@@ -16,8 +16,8 @@ services:
       # 覆盖 .env 中的数据库路径，强制使用绝对路径
       - DATABASE_URL=sqlite:////app/data/pubmed_app.db
     volumes:
-      - db_data:/app/data
-      - log_data:/app/logs
+      - ./data:/app/data
+      - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5003/"]
@@ -39,7 +39,3 @@ services:
     depends_on:
       - app
     restart: unless-stopped
-
-volumes:
-  db_data:
-  log_data:

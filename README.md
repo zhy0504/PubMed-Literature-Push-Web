@@ -154,4 +154,4 @@ python manage.py db upgrade
 - 在 GitHub 提交 Issue
 
 ---
-**说明**：本系统仅供科研与教学用途，请遵守 PubMed 使用条款及相关法律法规。
+**说明**：本系统仅供科研与教学用途，请遵守 PubMed 使用条款及相关法律法规.

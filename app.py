@@ -4832,7 +4832,7 @@ def subscribe_keyword():
         log_activity('INFO', 'subscription', f'用户 {current_user.email} 订阅关键词: {keywords}', current_user.id, request.remote_addr)
         flash(f'成功订阅关键词: {keywords}', 'success')
     
-    return redirect(url_for('index'))
+    return redirect(url_for('subscriptions'))
 
 @app.route('/unsubscribe_keyword', methods=['POST'])
 @login_required

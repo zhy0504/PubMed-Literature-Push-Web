@@ -3879,8 +3879,15 @@ def sync_env_to_database():
         print(f"[同步] ✗ 同步失败: {e}")
         app.logger.error(f"同步环境变量失败: {e}")
 
-# 应用启动时执行同步
-sync_env_to_database()
+# 使用 before_first_request 在第一次请求时执行同步
+_sync_done = False
+
+@app.before_request
+def before_request_sync():
+    global _sync_done
+    if not _sync_done:
+        sync_env_to_database()
+        _sync_done = True
 
 # 路由
 @app.route('/', methods=['GET', 'POST'])

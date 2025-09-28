@@ -69,6 +69,7 @@ class JournalDataCache:
     
     def _load_data(self):
         """加载期刊质量数据"""
+        import os
         try:
             start_time = time.time()
             data_dir = os.path.join(os.path.dirname(__file__), 'data')
@@ -119,7 +120,6 @@ class JournalDataCache:
             self.last_loaded = datetime.now()
             self.load_timestamp = time.time()
             
-            import os
             worker_id = os.getpid()
             print(f"[Worker {worker_id}] 期刊数据缓存加载完成: JCR({len(self.jcr_data)}条) + 中科院({len(self.zky_data)}条), 耗时 {load_time:.2f}秒")
             

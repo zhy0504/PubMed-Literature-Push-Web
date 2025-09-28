@@ -12,7 +12,7 @@ services:
       - "5003:5003"
     environment:
       - FLASK_ENV=production
-      - DATABASE_URL=sqlite:///pubmed_app.db
+      - DATABASE_URL=sqlite:////app/pubmed_app.db
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
       - PUBMED_API_KEY=${PUBMED_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

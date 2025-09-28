@@ -353,30 +353,35 @@ app.logger.setLevel(log_level)
 
 # 配置日志文件处理器
 if log_file:
-    # 确保日志目录存在
-    log_dir = os.path.dirname(log_file)
-    if log_dir and not os.path.exists(log_dir):
-        os.makedirs(log_dir, exist_ok=True)
-    
-    # 创建文件处理器（10MB 轮转，保留 5 个备份）
-    file_handler = RotatingFileHandler(
-        log_file,
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(log_level)
-    
-    # 设置日志格式
-    formatter = logging.Formatter(
-        '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
-    )
-    file_handler.setFormatter(formatter)
-    
-    # 添加到 app.logger
-    app.logger.addHandler(file_handler)
-
-app.logger.info(f"应用启动，日志级别: {log_level_name}, 日志文件: {log_file}")
+    try:
+        # 确保日志目录存在
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+        
+        # 创建文件处理器（10MB 轮转，保留 5 个备份）
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(log_level)
+        
+        # 设置日志格式
+        formatter = logging.Formatter(
+            '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+        )
+        file_handler.setFormatter(formatter)
+        
+        # 添加到 app.logger
+        app.logger.addHandler(file_handler)
+        app.logger.info(f"应用启动，日志级别: {log_level_name}, 日志文件: {log_file}")
+    except PermissionError:
+        # 如果无法写入日志文件，只使用控制台输出
+        print(f"[警告] 无权限写入日志文件: {log_file}，仅使用控制台输出")
+    except Exception as e:
+        print(f"[警告] 日志文件配置失败: {e}，仅使用控制台输出")
 
 # 初始化扩展
 db = SQLAlchemy(app)

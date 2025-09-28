@@ -33,8 +33,10 @@ if [ "$DB_VALID" = false ]; then
     fi
 fi
 
-# 创建必要目录
+# 创建必要目录并设置权限
 mkdir -p /app/data /app/logs
+# 确保当前用户（appuser）有写入权限
+touch /app/logs/app.log 2>/dev/null || echo "[警告] 无法创建日志文件，将使用控制台输出"
 
 # 删除 Flask 自动创建的 instance 目录（避免创建错误的数据库）
 rm -rf /app/instance

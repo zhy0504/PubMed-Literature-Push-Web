@@ -3824,9 +3824,10 @@ def sync_env_to_database():
         with app.app_context():
             # 检查数据库表是否存在
             try:
-                db.engine.execute('SELECT 1 FROM system_setting LIMIT 1')
+                # 使用模型查询来检查表是否存在
+                SystemSetting.query.first()
             except Exception as e:
-                print(f"[同步] 数据库表尚未创建，跳过同步: {e}")
+                print(f"[同步] 数据库表尚未创建，跳过同步")
                 return
             
             # 同步 PubMed 相关配置

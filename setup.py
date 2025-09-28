@@ -360,26 +360,24 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
 2. 合理使用AND、OR、NOT逻辑操作符
 3. 使用字段限定符（如[Title/Abstract], [MeSH Terms]等）
 4. 考虑同义词和相关术语
-5. 返回的检索式应该准确、全面且可执行
+5. 只返回最终的PubMed检索式，不要任何解释说明或分析过程
+6. 检索式应该可以直接复制到PubMed搜索框中使用
 
-用户关键词: {keywords}
-
-请生成PubMed检索式：""", True),
+用户关键词: {keywords}""", True),
             
             # 翻译提示词
             ('translator', """你是一个专业的医学文献翻译专家，精通英文医学术语和中文医学表达。
 
-任务：将以下英文医学摘要翻译成中文，要求：
+请将以下英文医学摘要翻译成中文，要求：
 1. 准确传达原文的科学内容和逻辑
 2. 使用规范的中文医学术语
 3. 保持原文的学术风格和专业性
 4. 确保翻译流畅自然，符合中文表达习惯
 5. 对于专业术语，在首次出现时可以加注英文原文
+6. 只返回中文翻译结果，不要任何额外说明或格式
 
 英文摘要：
-{abstract}
-
-中文译文：""", True)
+{abstract}""", True)
         ]
         
         for template_type, prompt_content, is_default in default_prompts:

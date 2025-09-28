@@ -3819,6 +3819,7 @@ class PubMedAPI:
 # 初始化环境变量同步
 def sync_env_to_database():
     """同步环境变量到数据库配置"""
+    print("[同步] 开始执行环境变量同步...")
     try:
         with app.app_context():
             # 同步 PubMed 相关配置
@@ -3827,6 +3828,8 @@ def sync_env_to_database():
                 'pubmed_max_results': os.environ.get('PUBMED_MAX_RESULTS'),
                 'pubmed_timeout': os.environ.get('PUBMED_TIMEOUT'),
             }
+            
+            print(f"[同步] 检测到环境变量: {list(k for k,v in pubmed_settings.items() if v)}")
             
             desc_map = {
                 'pubmed_api_key': 'PubMed API Key',
@@ -3837,15 +3840,20 @@ def sync_env_to_database():
             for key, env_value in pubmed_settings.items():
                 if env_value:
                     current_value = SystemSetting.get_setting(key)
+                    print(f"[同步] {key}: 环境变量={env_value}, 数据库={current_value}")
                     if current_value != env_value:
                         SystemSetting.set_setting(key, env_value, desc_map.get(key, ''), 'pubmed')
+                        print(f"[同步] ✓ 已更新 {key}")
                         app.logger.info(f"已从环境变量同步配置: {key} = {env_value}")
+                    else:
+                        print(f"[同步] - {key} 无需更新（值相同）")
             
             # 同步 OpenAI 相关配置（如果数据库中没有活跃的 AI 提供商）
             openai_api_key = os.environ.get('OPENAI_API_KEY')
             openai_api_base = os.environ.get('OPENAI_API_BASE', 'https://api.openai.com/v1')
             
             if openai_api_key:
+                print(f"[同步] 检测到 OPENAI_API_KEY")
                 # 检查是否已存在活跃的 OpenAI 提供商
                 existing_provider = AISetting.query.filter_by(provider='openai', is_active=True).first()
                 
@@ -3861,8 +3869,14 @@ def sync_env_to_database():
                     new_provider.set_api_key(openai_api_key)
                     db.session.add(new_provider)
                     db.session.commit()
+                    print(f"[同步] ✓ 已创建 OpenAI 配置: {openai_api_base}")
                     app.logger.info(f"已从环境变量创建 OpenAI 配置: {openai_api_base}")
+                else:
+                    print(f"[同步] - OpenAI 配置已存在，跳过创建")
+            
+            print("[同步] 环境变量同步完成")
     except Exception as e:
+        print(f"[同步] ✗ 同步失败: {e}")
         app.logger.error(f"同步环境变量失败: {e}")
 
 # 应用启动时执行同步

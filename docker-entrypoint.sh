@@ -7,15 +7,15 @@ echo "================================================"
 
 # 检查数据库是否存在且有效
 DB_VALID=false
-if [ -f "/app/pubmed_app.db" ]; then
+if [ -f "/app/data/pubmed_app.db" ]; then
     echo "[检查] 验证数据库完整性..."
     # 检查数据库是否包含 user 表
-    if sqlite3 /app/pubmed_app.db "SELECT name FROM sqlite_master WHERE type='table' AND name='user';" 2>/dev/null | grep -q "user"; then
+    if sqlite3 /app/data/pubmed_app.db "SELECT name FROM sqlite_master WHERE type='table' AND name='user';" 2>/dev/null | grep -q "user"; then
         DB_VALID=true
         echo "[信息] 数据库有效，跳过初始化"
     else
         echo "[警告] 数据库文件存在但无效，重新初始化..."
-        rm -f /app/pubmed_app.db
+        rm -f /app/data/pubmed_app.db
     fi
 fi
 

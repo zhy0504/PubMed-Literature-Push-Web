@@ -13,6 +13,15 @@ import argparse
 from pathlib import Path
 import datetime
 
+def get_database_path():
+    """获取数据库文件路径 - 支持Docker和本地环境"""
+    if os.path.exists('/app/data'):
+        # Docker环境
+        return Path("/app/data/pubmed_app.db")
+    else:
+        # 本地环境
+        return Path("pubmed_app.db")
+
 def validate_email(email):
     """验证邮箱格式"""
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
@@ -60,8 +69,8 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
     print("\n正在创建数据库...")
     
     try:
-        # 数据库文件路径
-        db_path = Path("pubmed_app.db")
+        # 数据库文件路径 - 支持Docker环境
+        db_path = get_database_path()
         
         # 删除现有数据库
         if db_path.exists():
@@ -212,8 +221,9 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider_id INTEGER NOT NULL,
                 model_name VARCHAR(100) NOT NULL,
-                model_type VARCHAR(20),
-                is_active BOOLEAN DEFAULT 1,
+                model_id VARCHAR(100) NOT NULL,
+                model_type VARCHAR(20) NOT NULL,
+                is_available BOOLEAN DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (provider_id) REFERENCES ai_setting (id)
             )
@@ -426,8 +436,9 @@ def setup_default_accounts():
     print()
     
     # 检查是否已存在数据库
-    if Path("pubmed_app.db").exists():
-        print("警告：检测到已存在数据库文件 pubmed_app.db")
+    db_path = get_database_path()
+    if db_path.exists():
+        print(f"警告：检测到已存在数据库文件 {db_path}")
         overwrite = input("是否要重新创建数据库？这将删除所有现有数据 (y/N): ").strip().lower()
         if overwrite not in ['y', 'yes', '是']:
             print("设置已取消。")
@@ -493,8 +504,9 @@ def main():
     print()
     
     # 检查是否已存在数据库
-    if Path("pubmed_app.db").exists():
-        print("警告：检测到已存在数据库文件 pubmed_app.db")
+    db_path = get_database_path()
+    if db_path.exists():
+        print(f"警告：检测到已存在数据库文件 {db_path}")
         overwrite = input("是否要重新创建数据库？这将删除所有现有数据 (y/N): ").strip().lower()
         if overwrite not in ['y', 'yes', '是']:
             print("设置已取消。")

@@ -328,8 +328,8 @@ def toggle_user_status(user_id):
         db.session.rollback()
         return False
 
-# 创建应用
-app = Flask(__name__)
+# 创建应用（禁用 instance 文件夹）
+app = Flask(__name__, instance_path='/tmp/instance')
 app.config.from_object(Config)
 
 # 初始化扩展

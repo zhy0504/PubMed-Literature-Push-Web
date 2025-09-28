@@ -104,6 +104,17 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 is_active BOOLEAN DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_search TIMESTAMP,
+                max_results INTEGER DEFAULT 10000,
+                days_back INTEGER DEFAULT 30,
+                exclude_no_issn BOOLEAN DEFAULT 1,
+                jcr_quartiles TEXT,
+                min_impact_factor REAL,
+                cas_categories TEXT,
+                cas_top_only BOOLEAN DEFAULT 0,
+                push_frequency VARCHAR(20) DEFAULT 'daily',
+                push_time VARCHAR(10) DEFAULT '09:00',
+                push_day VARCHAR(10) DEFAULT 'monday',
+                push_month_day INTEGER DEFAULT 1,
                 FOREIGN KEY (user_id) REFERENCES user (id)
             )
         ''')

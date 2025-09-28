@@ -35,8 +35,13 @@ fi
 
 # 创建必要目录并设置权限
 mkdir -p /app/data /app/logs
-# 确保当前用户（appuser）有写入权限
-touch /app/logs/app.log 2>/dev/null || echo "[警告] 无法创建日志文件，将使用控制台输出"
+
+# 如果 logs 目录是挂载的，尝试修复权限（需要 root）
+if [ -w /app/logs ] || [ "$(stat -c %U /app/logs 2>/dev/null)" = "appuser" ]; then
+    touch /app/logs/app.log 2>/dev/null && echo "[信息] 日志文件已就绪"
+else
+    echo "[警告] /app/logs 目录权限不足，日志将输出到控制台"
+fi
 
 # 删除 Flask 自动创建的 instance 目录（避免创建错误的数据库）
 rm -rf /app/instance

@@ -17,7 +17,7 @@ services:
       - DATABASE_URL=sqlite:////app/pubmed_app.db
     volumes:
       - db_data:/app
-      - ./logs:/app/logs
+      - log_data:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5003/"]
@@ -42,3 +42,4 @@ services:
 
 volumes:
   db_data:
+  log_data:

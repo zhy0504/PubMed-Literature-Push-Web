@@ -8,7 +8,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     FLASK_APP=app.py \
-    FLASK_ENV=production
+    FLASK_ENV=production \
+    DATABASE_URL=sqlite:////app/pubmed_app.db
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y \

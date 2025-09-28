@@ -36,6 +36,9 @@ fi
 # 创建必要目录
 mkdir -p /app/data /app/logs
 
+# 删除 Flask 自动创建的 instance 目录（避免创建错误的数据库）
+rm -rf /app/instance
+
 echo "[启动] 启动应用服务..."
 echo "================================================"
 

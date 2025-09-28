@@ -268,7 +268,17 @@ def process_zky_data(source_path, output_path):
 # 配置类
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or f'sqlite:///{os.path.abspath("pubmed_app.db")}'
+    # 修复数据库路径：确保使用绝对路径
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        db_url = f'sqlite:///{os.path.abspath("pubmed_app.db")}'
+    # 如果是相对路径的 sqlite URL，转换为绝对路径
+    elif db_url.startswith('sqlite:///') and not db_url.startswith('sqlite:////'):
+        # sqlite:///pubmed_app.db -> sqlite:////app/pubmed_app.db
+        db_path = db_url.replace('sqlite:///', '')
+        if not os.path.isabs(db_path):
+            db_url = f'sqlite:///{os.path.abspath(db_path)}'
+    SQLALCHEMY_DATABASE_URI = db_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
     # PubMed API配置

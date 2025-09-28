@@ -180,6 +180,58 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
             )
         ''')
         
+        # 创建密码重置令牌表
+        cursor.execute('''
+            CREATE TABLE password_reset_token (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token VARCHAR(100) NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                used BOOLEAN DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES user (id)
+            )
+        ''')
+        
+        # 创建AI设置表
+        cursor.execute('''
+            CREATE TABLE ai_setting (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider_name VARCHAR(50) NOT NULL,
+                base_url VARCHAR(200) NOT NULL,
+                api_key VARCHAR(200) NOT NULL,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # 创建AI模型表
+        cursor.execute('''
+            CREATE TABLE ai_model (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider_id INTEGER NOT NULL,
+                model_name VARCHAR(100) NOT NULL,
+                model_type VARCHAR(20),
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (provider_id) REFERENCES ai_setting (id)
+            )
+        ''')
+        
+        # 创建AI提示词模板表
+        cursor.execute('''
+            CREATE TABLE ai_prompt_template (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name VARCHAR(100) NOT NULL,
+                template_type VARCHAR(20) NOT NULL,
+                content TEXT NOT NULL,
+                is_default BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         # 创建邮件配置表
         cursor.execute('''
             CREATE TABLE mail_config (

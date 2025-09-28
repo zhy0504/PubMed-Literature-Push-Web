@@ -3816,6 +3816,58 @@ class PubMedAPI:
             'no_filter_applied': False  # 标记已应用筛选条件
         }
 
+# 初始化环境变量同步
+def sync_env_to_database():
+    """同步环境变量到数据库配置"""
+    try:
+        with app.app_context():
+            # 同步 PubMed 相关配置
+            pubmed_settings = {
+                'pubmed_api_key': os.environ.get('PUBMED_API_KEY'),
+                'pubmed_max_results': os.environ.get('PUBMED_MAX_RESULTS'),
+                'pubmed_timeout': os.environ.get('PUBMED_TIMEOUT'),
+            }
+            
+            desc_map = {
+                'pubmed_api_key': 'PubMed API Key',
+                'pubmed_max_results': 'PubMed每次最大检索数量',
+                'pubmed_timeout': 'PubMed请求超时时间(秒)',
+            }
+            
+            for key, env_value in pubmed_settings.items():
+                if env_value:
+                    current_value = SystemSetting.get_setting(key)
+                    if current_value != env_value:
+                        SystemSetting.set_setting(key, env_value, desc_map.get(key, ''), 'pubmed')
+                        app.logger.info(f"已从环境变量同步配置: {key} = {env_value}")
+            
+            # 同步 OpenAI 相关配置（如果数据库中没有活跃的 AI 提供商）
+            openai_api_key = os.environ.get('OPENAI_API_KEY')
+            openai_api_base = os.environ.get('OPENAI_API_BASE', 'https://api.openai.com/v1')
+            
+            if openai_api_key:
+                # 检查是否已存在活跃的 OpenAI 提供商
+                existing_provider = AISetting.query.filter_by(provider='openai', is_active=True).first()
+                
+                if not existing_provider:
+                    # 如果没有活跃的 OpenAI 配置，创建一个
+                    new_provider = AISetting(
+                        name='OpenAI (从环境变量)',
+                        provider='openai',
+                        api_base=openai_api_base,
+                        model='gpt-3.5-turbo',
+                        is_active=True
+                    )
+                    new_provider.set_api_key(openai_api_key)
+                    db.session.add(new_provider)
+                    db.session.commit()
+                    app.logger.info(f"已从环境变量创建 OpenAI 配置: {openai_api_base}")
+    except Exception as e:
+        app.logger.error(f"同步环境变量失败: {e}")
+
+# 应用启动时执行同步
+sync_env_to_database()
+
 # 路由
 @app.route('/', methods=['GET', 'POST'])
 def index():

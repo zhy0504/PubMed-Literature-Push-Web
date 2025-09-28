@@ -233,9 +233,8 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
         cursor.execute('''
             CREATE TABLE ai_prompt_template (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name VARCHAR(100) NOT NULL,
                 template_type VARCHAR(20) NOT NULL,
-                content TEXT NOT NULL,
+                prompt_content TEXT NOT NULL,
                 is_default BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

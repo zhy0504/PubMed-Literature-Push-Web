@@ -119,7 +119,9 @@ class JournalDataCache:
             self.last_loaded = datetime.now()
             self.load_timestamp = time.time()
             
-            print(f"期刊数据缓存加载完成: JCR({len(self.jcr_data)}条) + 中科院({len(self.zky_data)}条), 耗时 {load_time:.2f}秒")
+            import os
+            worker_id = os.getpid()
+            print(f"[Worker {worker_id}] 期刊数据缓存加载完成: JCR({len(self.jcr_data)}条) + 中科院({len(self.zky_data)}条), 耗时 {load_time:.2f}秒")
             
         except Exception as e:
             print(f"加载期刊数据失败: {str(e)}")
@@ -376,7 +378,9 @@ if log_file:
         
         # 添加到 app.logger
         app.logger.addHandler(file_handler)
-        app.logger.info(f"应用启动，日志级别: {log_level_name}, 日志文件: {log_file}")
+        import os
+        worker_id = os.getpid()
+        app.logger.info(f"[Worker {worker_id}] 应用启动，日志级别: {log_level_name}, 日志文件: {log_file}")
     except PermissionError:
         # 如果无法写入日志文件，只使用控制台输出
         print(f"[警告] 无权限写入日志文件: {log_file}，仅使用控制台输出")
@@ -3819,7 +3823,9 @@ class PubMedAPI:
 # 初始化环境变量同步
 def sync_env_to_database():
     """同步环境变量到数据库配置"""
-    print("[同步] 开始执行环境变量同步...")
+    import os
+    worker_id = os.getpid()
+    print(f"[Worker {worker_id}] [同步] 开始执行环境变量同步...")
     try:
         with app.app_context():
             # 检查数据库表是否存在
@@ -3827,7 +3833,7 @@ def sync_env_to_database():
                 # 使用模型查询来检查表是否存在
                 SystemSetting.query.first()
             except Exception as e:
-                print(f"[同步] 数据库表尚未创建，跳过同步")
+                print(f"[Worker {worker_id}] [同步] 数据库表尚未创建，跳过同步")
                 return
             
             # 同步 PubMed 相关配置
@@ -3877,10 +3883,41 @@ def sync_env_to_database():
                     db.session.commit()
                     print(f"[同步] ✓ 已创建 OpenAI 配置: {openai_api_base}")
                     app.logger.info(f"已从环境变量创建 OpenAI 配置: {openai_api_base}")
+                    
+                    # 自动获取并创建模型列表
+                    try:
+                        ai_service = AIService()
+                        models = ai_service.fetch_models(new_provider)
+                        if models:
+                            for model_data in models:
+                                # 检查模型是否已存在
+                                existing_model = AIModel.query.filter_by(
+                                    provider_id=new_provider.id,
+                                    model_id=model_data['id']
+                                ).first()
+                                
+                                if not existing_model:
+                                    new_model = AIModel(
+                                        provider_id=new_provider.id,
+                                        model_name=model_data['id'],
+                                        model_id=model_data['id'],
+                                        model_type='general',
+                                        is_available=True
+                                    )
+                                    db.session.add(new_model)
+                            
+                            db.session.commit()
+                            print(f"[同步] ✓ 自动创建了 {len(models)} 个AI模型")
+                            app.logger.info(f"自动创建了 {len(models)} 个AI模型")
+                        else:
+                            print(f"[同步] ⚠ 未能获取到模型列表，请手动刷新")
+                    except Exception as e:
+                        print(f"[同步] ⚠ 自动获取模型失败: {e}")
+                        app.logger.warning(f"自动获取AI模型失败: {e}")
                 else:
                     print(f"[同步] - OpenAI 配置已存在，跳过创建")
             
-            print("[同步] 环境变量同步完成")
+            print(f"[Worker {worker_id}] [同步] 环境变量同步完成")
     except Exception as e:
         print(f"[同步] ✗ 同步失败: {e}")
         app.logger.error(f"同步环境变量失败: {e}")

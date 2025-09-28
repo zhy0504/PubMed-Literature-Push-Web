@@ -12,8 +12,7 @@ services:
       - DATABASE_URL=sqlite:///pubmed_app.db
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
     volumes:
-      - ./data:/app/data
-      - ./pubmed_app.db:/app/pubmed_app.db
+      - db_data:/app
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
@@ -53,6 +52,7 @@ services:
 
 volumes:
   redis_data:
+  db_data:
 
 networks:
   default:

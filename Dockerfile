@@ -27,10 +27,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # 复制项目文件
 COPY . .
 
-# 创建必要的目录
+# 创建必要的目录并设置脚本权限
 RUN mkdir -p /app/data && \
     mkdir -p /app/logs && \
-    chmod +x /app/start.sh
+    chmod +x /app/start.sh && \
+    chmod +x /app/docker-entrypoint.sh
 
 # 创建非root用户
 RUN adduser --disabled-password --gecos '' appuser && \
@@ -43,6 +44,9 @@ EXPOSE 5003
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5003/ || exit 1
+
+# 设置入口点
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # 启动命令
 CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "4", "--timeout", "120", "app:app"]

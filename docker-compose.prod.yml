@@ -18,8 +18,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - REDIS_URL=redis://redis:6379/0
     volumes:
-      - ./data:/app/data
-      - ./pubmed_app.db:/app/pubmed_app.db
+      - db_data:/app
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
@@ -58,3 +57,4 @@ services:
 
 volumes:
   redis_data:
+  db_data:

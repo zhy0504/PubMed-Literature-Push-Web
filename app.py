@@ -9420,6 +9420,25 @@ if __name__ == '__main__':
             
             for key, value, desc, category in default_settings:
                 SystemSetting.set_setting(key, value, desc, category)
+        else:
+            # 数据库已存在，同步环境变量到数据库（如果环境变量有设置）
+            env_sync_settings = {
+                'pubmed_api_key': os.environ.get('PUBMED_API_KEY'),
+                'pubmed_max_results': os.environ.get('PUBMED_MAX_RESULTS'),
+                'pubmed_timeout': os.environ.get('PUBMED_TIMEOUT'),
+            }
+            
+            for key, env_value in env_sync_settings.items():
+                if env_value:  # 只有环境变量有值时才更新
+                    current_value = SystemSetting.get_setting(key)
+                    if current_value != env_value:
+                        desc_map = {
+                            'pubmed_api_key': 'PubMed API Key',
+                            'pubmed_max_results': 'PubMed每次最大检索数量',
+                            'pubmed_timeout': 'PubMed请求超时时间(秒)',
+                        }
+                        SystemSetting.set_setting(key, env_value, desc_map.get(key, ''), 'pubmed')
+                        app.logger.info(f"已从环境变量同步配置: {key} = {env_value}")
         
         # 创建默认管理员用户
         if not User.query.filter_by(is_admin=True).first():

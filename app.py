@@ -35,6 +35,13 @@ import threading
 import queue
 from datetime import datetime, timedelta
 
+# 加载 .env 文件
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv 未安装，跳过
+
 class JournalDataCache:
     """期刊数据缓存单例类，避免重复加载大量数据"""
     
@@ -331,6 +338,45 @@ def toggle_user_status(user_id):
 # 创建应用（禁用 instance 文件夹）
 app = Flask(__name__, instance_path='/tmp/instance')
 app.config.from_object(Config)
+
+# 配置日志
+import logging
+from logging.handlers import RotatingFileHandler
+
+# 从环境变量获取日志级别和文件路径
+log_level_name = os.environ.get('LOG_LEVEL', 'INFO').upper()
+log_file = os.environ.get('LOG_FILE', '/app/logs/app.log')
+
+# 设置日志级别
+log_level = getattr(logging, log_level_name, logging.INFO)
+app.logger.setLevel(log_level)
+
+# 配置日志文件处理器
+if log_file:
+    # 确保日志目录存在
+    log_dir = os.path.dirname(log_file)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir, exist_ok=True)
+    
+    # 创建文件处理器（10MB 轮转，保留 5 个备份）
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(log_level)
+    
+    # 设置日志格式
+    formatter = logging.Formatter(
+        '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+    )
+    file_handler.setFormatter(formatter)
+    
+    # 添加到 app.logger
+    app.logger.addHandler(file_handler)
+
+app.logger.info(f"应用启动，日志级别: {log_level_name}, 日志文件: {log_file}")
 
 # 初始化扩展
 db = SQLAlchemy(app)
@@ -1692,8 +1738,32 @@ class AIService:
 中文译文:"""
     
     def get_active_provider(self):
-        """获取活跃的AI提供商"""
-        return AISetting.query.filter_by(is_active=True).first()
+        """获取活跃的AI提供商，优先使用数据库配置，其次使用环境变量"""
+        # 首先尝试从数据库获取
+        db_provider = AISetting.query.filter_by(is_active=True).first()
+        if db_provider:
+            return db_provider
+        
+        # 如果数据库没有配置，尝试从环境变量创建临时提供商对象
+        openai_api_key = os.environ.get('OPENAI_API_KEY')
+        openai_api_base = os.environ.get('OPENAI_API_BASE', 'https://api.openai.com/v1')
+        
+        if openai_api_key:
+            # 创建临时 AISetting 对象（不保存到数据库）
+            class TempProvider:
+                def __init__(self, api_key, base_url):
+                    self.api_key = api_key
+                    self.base_url = base_url
+                    self.provider_name = 'Environment Variable'
+                    self.is_active = True
+                
+                def get_decrypted_api_key(self):
+                    return self.api_key
+            
+            app.logger.info(f"使用环境变量 OPENAI_API_KEY 作为 AI 提供商")
+            return TempProvider(openai_api_key, openai_api_base)
+        
+        return None
     
     def get_model_by_type(self, model_type):
         """根据类型获取可用的模型"""
@@ -9313,10 +9383,11 @@ if __name__ == '__main__':
         
         # 初始化系统设置
         if not SystemSetting.query.first():
+            # 从环境变量读取默认值，如果没有则使用硬编码默认值
             default_settings = [
-                ('pubmed_max_results', '10000', 'PubMed每次最大检索数量', 'pubmed'),
-                ('pubmed_timeout', '10', 'PubMed请求超时时间(秒)', 'pubmed'),
-                ('pubmed_api_key', '', 'PubMed API Key', 'pubmed'),
+                ('pubmed_max_results', os.environ.get('PUBMED_MAX_RESULTS', '10000'), 'PubMed每次最大检索数量', 'pubmed'),
+                ('pubmed_timeout', os.environ.get('PUBMED_TIMEOUT', '10'), 'PubMed请求超时时间(秒)', 'pubmed'),
+                ('pubmed_api_key', os.environ.get('PUBMED_API_KEY', ''), 'PubMed API Key', 'pubmed'),
                 ('push_frequency', 'daily', '默认推送频率', 'push'),
                 ('push_time', '09:00', '默认推送时间', 'push'),
                 ('push_day', 'monday', '默认每周推送日(周几)', 'push'),

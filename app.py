@@ -3864,7 +3864,7 @@ def sync_env_to_database():
                         base_url=openai_api_base,
                         is_active=True
                     )
-                    new_provider.set_api_key(openai_api_key)
+                    new_provider.set_encrypted_api_key(openai_api_key)
                     db.session.add(new_provider)
                     db.session.commit()
                     print(f"[同步] ✓ 已创建 OpenAI 配置: {openai_api_base}")

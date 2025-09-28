@@ -350,6 +350,46 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 VALUES (?, ?, ?, ?)
             ''', (key, value, desc, category))
         
+        # 插入默认AI提示词模板
+        default_prompts = [
+            # 检索式生成提示词
+            ('query_builder', """你是一个专业的PubMed检索专家。用户会给你一个研究主题或关键词，请帮助生成精确的PubMed检索式。
+
+要求：
+1. 使用MeSH词汇和自由词结合
+2. 合理使用AND、OR、NOT逻辑操作符
+3. 使用字段限定符（如[Title/Abstract], [MeSH Terms]等）
+4. 考虑同义词和相关术语
+5. 返回的检索式应该准确、全面且可执行
+
+用户关键词: {keywords}
+
+请生成PubMed检索式：""", True),
+            
+            # 翻译提示词
+            ('translator', """你是一个专业的医学文献翻译专家，精通英文医学术语和中文医学表达。
+
+任务：将以下英文医学摘要翻译成中文，要求：
+1. 准确传达原文的科学内容和逻辑
+2. 使用规范的中文医学术语
+3. 保持原文的学术风格和专业性
+4. 确保翻译流畅自然，符合中文表达习惯
+5. 对于专业术语，在首次出现时可以加注英文原文
+
+英文摘要：
+{abstract}
+
+中文译文：""", True)
+        ]
+        
+        for template_type, prompt_content, is_default in default_prompts:
+            cursor.execute('''
+                INSERT INTO ai_prompt_template (template_type, prompt_content, is_default)
+                VALUES (?, ?, ?)
+            ''', (template_type, prompt_content, is_default))
+        
+        print("默认AI提示词模板创建完成")
+        
         # 提交更改
         conn.commit()
         

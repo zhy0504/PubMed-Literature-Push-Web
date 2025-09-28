@@ -152,7 +152,6 @@ python manage.py db upgrade
 
 ## 联系
 - 在 GitHub 提交 Issue
-- 或发送邮件至项目维护团队
 
 ---
 **说明**：本系统仅供科研与教学用途，请遵守 PubMed 使用条款及相关法律法规。

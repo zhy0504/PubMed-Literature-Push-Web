@@ -7478,7 +7478,12 @@ def admin_push():
                                     <i class="fas fa-clock"></i> 测试调度器
                                 </button>
                             </form>
-                            <small class="text-muted d-block">模拟定时任务执行，检查推送设置和时间判断</small>
+                            <form method="POST" action="/admin/push/reset-scheduler" style="display: inline;" class="ms-2">
+                                <button type="submit" class="btn btn-outline-warning" onclick="return confirm('确定要重置调度器吗？这将清理锁文件并重新启动调度器。')">
+                                    <i class="fas fa-redo"></i> 重置调度器
+                                </button>
+                            </form>
+                            <small class="text-muted d-block mt-2">测试：模拟定时任务执行 | 重置：清理锁文件并重启调度器</small>
                         </div>
                     </div>
                     
@@ -8303,6 +8308,60 @@ def trigger_push():
     except Exception as e:
         log_activity('ERROR', 'admin', f'手动推送失败: {str(e)}', current_user.id, request.remote_addr)
         flash(f'推送失败: {str(e)}', 'admin')
+    
+    return redirect(url_for('admin_push'))
+
+@app.route('/admin/push/reset-scheduler', methods=['POST'])
+@admin_required
+def reset_scheduler():
+    """重置调度器状态"""
+    try:
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 重置调度器状态', current_user.id, request.remote_addr)
+        
+        # 强制停止当前调度器
+        if scheduler.running:
+            try:
+                scheduler.shutdown(wait=False)
+                app.logger.info("[调度器重置] 已停止运行中的调度器")
+            except Exception as e:
+                app.logger.warning(f"[调度器重置] 停止调度器失败: {e}")
+        
+        # 清理所有锁文件和标记文件
+        lock_files = [
+            '/app/data/scheduler.lock',
+            '/app/data/scheduler_init_done'
+        ]
+        
+        for lock_file in lock_files:
+            if os.path.exists(lock_file):
+                try:
+                    os.remove(lock_file)
+                    app.logger.info(f"[调度器重置] 已删除锁文件: {lock_file}")
+                except Exception as e:
+                    app.logger.warning(f"[调度器重置] 删除锁文件失败 {lock_file}: {e}")
+        
+        # 重置应用标记
+        if hasattr(app, '_scheduler_init_attempted'):
+            delattr(app, '_scheduler_init_attempted')
+        
+        # 强制重新初始化调度器
+        try:
+            with app.app_context():
+                initialize_scheduler_safely()
+            
+            if scheduler.running:
+                flash('调度器重置成功，已重新启动', 'admin')
+                app.logger.info("[调度器重置] 调度器重新启动成功")
+            else:
+                flash('调度器重置完成，但重新启动失败，请检查日志', 'admin')
+                app.logger.error("[调度器重置] 调度器重新启动失败")
+        except Exception as e:
+            flash(f'调度器重新初始化失败: {str(e)}', 'admin')
+            app.logger.error(f"[调度器重置] 重新初始化失败: {e}")
+        
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'重置调度器失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'重置调度器失败: {str(e)}', 'admin')
     
     return redirect(url_for('admin_push'))
 

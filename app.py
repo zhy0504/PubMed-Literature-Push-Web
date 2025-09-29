@@ -10548,6 +10548,85 @@ if __name__ == '__main__':
         # 执行表结构检查和修复
         check_and_fix_database_schema()
         
+        # 添加详细的表结构验证和调试输出
+        print("\n" + "="*60)
+        print("📊 数据库表结构详细验证报告")
+        print("="*60)
+        
+        try:
+            from sqlalchemy import inspect
+            inspector = inspect(db.engine)
+            
+            # 检查所有表
+            tables = inspector.get_table_names()
+            print(f"🗂️  已创建的表 ({len(tables)}): {', '.join(tables)}")
+            
+            # 重点检查Article表结构
+            if 'article' in tables:
+                print(f"\n📋 Article表详细结构分析:")
+                article_columns = inspector.get_columns('article')
+                print(f"   总字段数: {len(article_columns)}")
+                print(f"   字段详情:")
+                
+                for i, col in enumerate(article_columns, 1):
+                    col_type = str(col['type'])
+                    nullable = "NULL" if col['nullable'] else "NOT NULL"
+                    default_info = f", DEFAULT: {col['default']}" if col.get('default') else ""
+                    print(f"     {i:2d}. {col['name']:15s} | {col_type:15s} | {nullable}{default_info}")
+                
+                # 验证关键AI字段
+                actual_columns = {col['name'] for col in article_columns}
+                ai_fields = {
+                    'abstract_cn': '中文翻译字段',
+                    'brief_intro': 'AI简介字段', 
+                    'issn': 'ISSN字段',
+                    'eissn': '电子ISSN字段'
+                }
+                
+                print(f"\n🔍 关键AI字段验证:")
+                all_present = True
+                for field, desc in ai_fields.items():
+                    if field in actual_columns:
+                        print(f"     ✅ {field:15s} : 存在 ({desc})")
+                    else:
+                        print(f"     ❌ {field:15s} : 缺失 ({desc})")
+                        all_present = False
+                        
+                if all_present:
+                    print(f"\n🎉 Article表结构完整！所有AI功能字段都存在")
+                else:
+                    print(f"\n⚠️  Article表存在缺失字段，可能影响AI功能")
+                    
+            else:
+                print("❌ Article表未找到！")
+            
+            # 检查其他重要表的关键字段
+            important_tables = {
+                'user': ['email', 'password_hash', 'push_time', 'push_frequency'],
+                'subscription': ['keywords', 'is_active', 'max_results'],
+                'mail_config': ['smtp_server', 'username', 'is_active'],
+                'ai_setting': ['provider_name', 'api_key', 'is_active']
+            }
+            
+            for table_name, key_fields in important_tables.items():
+                if table_name in tables:
+                    columns = inspector.get_columns(table_name)
+                    actual_fields = {col['name'] for col in columns}
+                    print(f"\n📋 {table_name.capitalize()}表: {len(columns)} 个字段")
+                    
+                    for field in key_fields:
+                        status = "✅" if field in actual_fields else "❌"
+                        print(f"     {status} {field}")
+                else:
+                    print(f"\n❌ {table_name}表未找到")
+                    
+        except Exception as e:
+            print(f"❌ 表结构验证失败: {e}")
+            
+        print("\n" + "="*60)
+        print("📊 验证报告完成")
+        print("="*60 + "\n")
+        
         # 初始化系统设置
         if not SystemSetting.query.first():
             # 从环境变量读取默认值，如果没有则使用硬编码默认值

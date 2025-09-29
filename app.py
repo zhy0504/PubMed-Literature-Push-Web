@@ -7835,62 +7835,67 @@ def admin_push():
     
     scheduler_status = {
         'running': scheduler_running,
-        'jobs': len(scheduler.get_jobs()) if scheduler.running else 0,
+        'jobs': len(scheduler.get_jobs()) if scheduler_running and scheduler.running else 0,
         'timezone': SYSTEM_TIMEZONE,
         'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')
     }
     
     # 获取下次执行时间并自动检测异常
-    if scheduler_running and scheduler.running:
-        jobs = scheduler.get_jobs()
-        if jobs:
-            next_run_time = jobs[0].next_run_time
-            if next_run_time:
-                # 确保时间显示使用应用程序时区
-                if next_run_time.tzinfo is None:
-                    next_run_time = APP_TIMEZONE.localize(next_run_time)
-                elif next_run_time.tzinfo != APP_TIMEZONE:
-                    next_run_time = next_run_time.astimezone(APP_TIMEZONE)
-                
-                # 自动检测时间异常：下次执行时间是否在过去
-                current_time = get_current_time()
-                if next_run_time < current_time:
-                    app.logger.warning(f"[调度器自检] 检测到时间异常：下次执行时间 {next_run_time} 早于当前时间 {current_time}")
-                    try:
-                        # 自动重启调度器修复问题
-                        app.logger.info("[调度器自检] 开始自动重启调度器")
-                        scheduler.shutdown(wait=False)
-                        init_scheduler()
-                        
-                        if scheduler.running:
-                            app.logger.info("[调度器自检] 自动重启成功")
-                            # 重新获取修复后的时间
-                            updated_jobs = scheduler.get_jobs()
-                            if updated_jobs:
-                                updated_next_run = updated_jobs[0].next_run_time
-                                if updated_next_run:
-                                    if updated_next_run.tzinfo is None:
-                                        updated_next_run = APP_TIMEZONE.localize(updated_next_run)
-                                    elif updated_next_run.tzinfo != APP_TIMEZONE:
-                                        updated_next_run = updated_next_run.astimezone(APP_TIMEZONE)
-                                    scheduler_status['next_run'] = updated_next_run.strftime('%Y-%m-%d %H:%M:%S')
-                                    scheduler_status['auto_fixed'] = True
+    if scheduler_running:
+        if scheduler.running:
+            # 本进程调度器运行中，可以获取详细信息
+            jobs = scheduler.get_jobs()
+            if jobs:
+                next_run_time = jobs[0].next_run_time
+                if next_run_time:
+                    # 确保时间显示使用应用程序时区
+                    if next_run_time.tzinfo is None:
+                        next_run_time = APP_TIMEZONE.localize(next_run_time)
+                    elif next_run_time.tzinfo != APP_TIMEZONE:
+                        next_run_time = next_run_time.astimezone(APP_TIMEZONE)
+                    
+                    # 自动检测时间异常：下次执行时间是否在过去
+                    current_time = get_current_time()
+                    if next_run_time < current_time:
+                        app.logger.warning(f"[调度器自检] 检测到时间异常：下次执行时间 {next_run_time} 早于当前时间 {current_time}")
+                        try:
+                            # 自动重启调度器修复问题
+                            app.logger.info("[调度器自检] 开始自动重启调度器")
+                            scheduler.shutdown(wait=False)
+                            init_scheduler()
+                            
+                            if scheduler.running:
+                                app.logger.info("[调度器自检] 自动重启成功")
+                                # 重新获取修复后的时间
+                                updated_jobs = scheduler.get_jobs()
+                                if updated_jobs:
+                                    updated_next_run = updated_jobs[0].next_run_time
+                                    if updated_next_run:
+                                        if updated_next_run.tzinfo is None:
+                                            updated_next_run = APP_TIMEZONE.localize(updated_next_run)
+                                        elif updated_next_run.tzinfo != APP_TIMEZONE:
+                                            updated_next_run = updated_next_run.astimezone(APP_TIMEZONE)
+                                        scheduler_status['next_run'] = updated_next_run.strftime('%Y-%m-%d %H:%M:%S')
+                                        scheduler_status['auto_fixed'] = True
+                                    else:
+                                        scheduler_status['next_run'] = '未知'
                                 else:
-                                    scheduler_status['next_run'] = '未知'
+                                    scheduler_status['next_run'] = '无任务'
                             else:
-                                scheduler_status['next_run'] = '无任务'
-                        else:
-                            app.logger.error("[调度器自检] 自动重启失败")
+                                app.logger.error("[调度器自检] 自动重启失败")
+                                scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S') + ' (异常)'
+                        except Exception as e:
+                            app.logger.error(f"[调度器自检] 自动修复失败: {e}")
                             scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S') + ' (异常)'
-                    except Exception as e:
-                        app.logger.error(f"[调度器自检] 自动修复失败: {e}")
-                        scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S') + ' (异常)'
+                    else:
+                        scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S')
                 else:
-                    scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S')
+                    scheduler_status['next_run'] = '未知'
             else:
-                scheduler_status['next_run'] = '未知'
+                scheduler_status['next_run'] = '无任务'
         else:
-            scheduler_status['next_run'] = '无任务'
+            # 跨进程检测到有调度器运行，但本进程调度器未运行
+            scheduler_status['next_run'] = '其他进程运行中'
     else:
         scheduler_status['next_run'] = '调度器未运行'
     
@@ -8776,7 +8781,7 @@ def scheduler_status():
         scheduler_running = check_scheduler_running()
         
         jobs = []
-        if scheduler.running:
+        if scheduler_running and scheduler.running:
             for job in scheduler.get_jobs():
                 next_run_time = job.next_run_time
                 next_run_str = '未设置'

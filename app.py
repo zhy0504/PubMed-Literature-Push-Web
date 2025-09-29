@@ -1580,35 +1580,75 @@ scheduler = BackgroundScheduler(timezone=BEIJING_TZ)
 
 def init_scheduler():
     """初始化定时推送调度器"""
-    # 添加定时任务
+    import os
+    import socket
     
-    # 根据配置的频率检查是否有用户需要推送
-    check_frequency = int(SystemSetting.get_setting('push_check_frequency', '1'))
-    if check_frequency == 1:
-        # 每小时检查（默认）
-        trigger = CronTrigger(minute=0)  # 每小时的0分执行
-        job_name = '每小时推送检查'
-    else:
-        # 每N小时检查
-        trigger = CronTrigger(minute=0, hour=f'*/{check_frequency}')
-        job_name = f'每{check_frequency}小时推送检查'
+    # 在gunicorn环境下，只有主进程才应该运行调度器
+    # 使用文件锁确保只有一个进程运行调度器
+    lock_file = '/app/data/scheduler.lock'
     
-    scheduler.add_job(
-        func=check_and_push_articles,
-        trigger=trigger,
-        id='push_check',
-        name=job_name,
-        replace_existing=True,
-        max_instances=1
-    )
-    
-    # 启动调度器
-    if not scheduler.running:
-        scheduler.start()
-        print("定时推送调度器已启动")
-    
-    # 注册关闭处理器
-    atexit.register(lambda: scheduler.shutdown() if scheduler.running else None)
+    try:
+        # 尝试创建锁文件
+        if os.path.exists(lock_file):
+            # 检查锁文件中的进程是否还在运行
+            try:
+                with open(lock_file, 'r') as f:
+                    old_pid = int(f.read().strip())
+                # 检查进程是否存在
+                os.kill(old_pid, 0)
+                print(f"调度器已在进程 {old_pid} 中运行，跳过初始化")
+                return
+            except (OSError, ValueError):
+                # 进程不存在或文件损坏，删除锁文件
+                os.remove(lock_file)
+        
+        # 创建新的锁文件
+        with open(lock_file, 'w') as f:
+            f.write(str(os.getpid()))
+        
+        print(f"进程 {os.getpid()} 开始初始化调度器")
+        
+        # 添加定时任务
+        # 根据配置的频率检查是否有用户需要推送
+        check_frequency = int(SystemSetting.get_setting('push_check_frequency', '1'))
+        if check_frequency == 1:
+            # 每小时检查（默认）
+            trigger = CronTrigger(minute=0)  # 每小时的0分执行
+            job_name = '每小时推送检查'
+        else:
+            # 每N小时检查
+            trigger = CronTrigger(minute=0, hour=f'*/{check_frequency}')
+            job_name = f'每{check_frequency}小时推送检查'
+        
+        scheduler.add_job(
+            func=check_and_push_articles,
+            trigger=trigger,
+            id='push_check',
+            name=job_name,
+            replace_existing=True,
+            max_instances=1
+        )
+        
+        # 启动调度器
+        if not scheduler.running:
+            scheduler.start()
+            print(f"定时推送调度器已启动 (PID: {os.getpid()})")
+        
+        # 注册关闭处理器
+        def cleanup_scheduler():
+            if scheduler.running:
+                scheduler.shutdown()
+            if os.path.exists(lock_file):
+                try:
+                    os.remove(lock_file)
+                    print("调度器锁文件已清理")
+                except:
+                    pass
+        
+        atexit.register(cleanup_scheduler)
+        
+    except Exception as e:
+        print(f"调度器初始化失败: {e}")
 
 def check_and_push_articles():
     """检查并执行推送任务"""
@@ -1620,29 +1660,51 @@ def check_and_push_articles():
             weekday = current_time.strftime('%A').lower()
             day_of_month = current_time.day
             
-            print(f"检查推送任务 - {current_time.strftime('%Y-%m-%d %H:%M')}")
+            # 详细日志：记录每次检查
+            app.logger.info(f"[调度器] 开始检查推送任务 - {current_time.strftime('%Y-%m-%d %H:%M:%S')} (PID: {os.getpid()})")
+            print(f"[调度器] 检查推送任务 - {current_time.strftime('%Y-%m-%d %H:%M:%S')} (PID: {os.getpid()})")
             
             # 获取所有活跃用户
             users = User.query.filter_by(is_active=True).all()
+            app.logger.info(f"[调度器] 找到 {len(users)} 个活跃用户")
             
+            push_count = 0
             for user in users:
                 if should_push_now(user, hour, minute, weekday, day_of_month):
                     try:
-                        print(f"开始为用户 {user.email} 推送文章")
+                        app.logger.info(f"[调度器] 开始为用户 {user.email} 推送文章 (推送时间: {user.push_time}, 频率: {user.push_frequency})")
+                        print(f"[调度器] 开始为用户 {user.email} 推送文章")
+                        
                         result = push_service.process_user_subscriptions(user.id)
+                        push_count += 1
+                        
                         if result and result[0].get('success'):
                             articles_count = result[0].get('articles_found', 0)
                             if articles_count > 0:
                                 log_activity('INFO', 'push', f'用户 {user.email} 推送成功: {articles_count} 篇文章')
+                                app.logger.info(f"[调度器] 用户 {user.email} 推送成功: {articles_count} 篇文章")
                             else:
                                 log_activity('INFO', 'push', f'用户 {user.email} 无新文章推送')
+                                app.logger.info(f"[调度器] 用户 {user.email} 无新文章推送")
                     except Exception as e:
                         log_activity('ERROR', 'push', f'用户 {user.email} 推送失败: {str(e)}')
-                        print(f"用户 {user.email} 推送失败: {e}")
+                        app.logger.error(f"[调度器] 用户 {user.email} 推送失败: {e}")
+                        print(f"[调度器] 用户 {user.email} 推送失败: {e}")
+                else:
+                    # 详细日志：记录为什么不推送
+                    if user.push_time:
+                        app.logger.debug(f"[调度器] 用户 {user.email} 时间不匹配 (设定: {user.push_time}, 当前: {hour:02d}:{minute:02d})")
+            
+            if push_count > 0:
+                app.logger.info(f"[调度器] 本次检查完成，推送了 {push_count} 个用户")
+                print(f"[调度器] 本次检查完成，推送了 {push_count} 个用户")
+            else:
+                app.logger.debug(f"[调度器] 本次检查完成，无用户需要推送")
                         
         except Exception as e:
             log_activity('ERROR', 'push', f'推送检查任务失败: {str(e)}')
-            print(f"推送检查任务失败: {e}")
+            app.logger.error(f"[调度器] 推送检查任务失败: {e}")
+            print(f"[调度器] 推送检查任务失败: {e}")
 
 def should_push_now(user, current_hour, current_minute, current_weekday, current_day):
     """判断用户是否应该在当前时间推送"""
@@ -3931,6 +3993,16 @@ def before_request_sync():
     if not _sync_done:
         sync_env_to_database()
         _sync_done = True
+
+# 在应用启动时初始化调度器（对Gunicorn生产环境友好）
+@app.before_first_request
+def initialize_scheduler():
+    """在第一个请求前初始化调度器"""
+    try:
+        with app.app_context():
+            init_scheduler()
+    except Exception as e:
+        print(f"调度器自动初始化失败: {e}")
 
 # 路由
 @app.route('/', methods=['GET', 'POST'])
@@ -7134,6 +7206,35 @@ def change_password():
 @admin_required
 def admin_push():
     """推送管理页面"""
+    # 获取调度器状态
+    scheduler_status = {
+        'running': scheduler.running,
+        'jobs': len(scheduler.get_jobs()) if scheduler.running else 0,
+        'lock_file_exists': os.path.exists('/app/data/scheduler.lock'),
+        'current_pid': os.getpid()
+    }
+    
+    # 如果锁文件存在，读取PID
+    if scheduler_status['lock_file_exists']:
+        try:
+            with open('/app/data/scheduler.lock', 'r') as f:
+                scheduler_status['scheduler_pid'] = int(f.read().strip())
+        except:
+            scheduler_status['scheduler_pid'] = None
+    else:
+        scheduler_status['scheduler_pid'] = None
+    
+    # 获取下次执行时间
+    if scheduler.running:
+        jobs = scheduler.get_jobs()
+        if jobs:
+            next_run_time = jobs[0].next_run_time
+            scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S') if next_run_time else '未知'
+        else:
+            scheduler_status['next_run'] = '无任务'
+    else:
+        scheduler_status['next_run'] = '调度器未运行'
+    
     # 获取推送统计
     stats = {
         'total_users': User.query.filter_by(is_active=True).count(),
@@ -7210,6 +7311,96 @@ def admin_push():
                         <div class="card-body">
                             <h5 class="card-title text-info">{{ stats.total_articles }}</h5>
                             <p class="card-text">文章总数</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            {% if scheduler_status['running'] %}
+                                <h5 class="card-title text-success">
+                                    <i class="fas fa-check-circle"></i> 运行中
+                                </h5>
+                                <p class="card-text">调度器状态</p>
+                            {% else %}
+                                <h5 class="card-title text-danger">
+                                    <i class="fas fa-times-circle"></i> 未运行
+                                </h5>
+                                <p class="card-text">调度器状态</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 调度器详细状态 -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5>
+                        <i class="fas fa-cogs"></i> 调度器状态详情
+                        {% if scheduler_status['running'] %}
+                            <span class="badge bg-success ms-2">运行中</span>
+                        {% else %}
+                            <span class="badge bg-danger ms-2">未运行</span>
+                        {% endif %}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <table class="table table-sm">
+                                <tr>
+                                    <td><strong>运行状态:</strong></td>
+                                    <td>
+                                        {% if scheduler_status['running'] %}
+                                            <span class="text-success"><i class="fas fa-check-circle"></i> 运行中</span>
+                                        {% else %}
+                                            <span class="text-danger"><i class="fas fa-times-circle"></i> 未运行</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>任务数量:</strong></td>
+                                    <td>{{ scheduler_status['jobs'] }} 个</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>下次执行:</strong></td>
+                                    <td>{{ scheduler_status['next_run'] }}</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="col-md-6">
+                            <table class="table table-sm">
+                                <tr>
+                                    <td><strong>当前进程PID:</strong></td>
+                                    <td>{{ scheduler_status['current_pid'] }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>调度器进程PID:</strong></td>
+                                    <td>
+                                        {% if scheduler_status['scheduler_pid'] %}
+                                            {{ scheduler_status['scheduler_pid'] }}
+                                            {% if scheduler_status['scheduler_pid'] == scheduler_status['current_pid'] %}
+                                                <span class="text-success">(本进程)</span>
+                                            {% else %}
+                                                <span class="text-info">(其他进程)</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="text-muted">无锁文件</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>锁文件状态:</strong></td>
+                                    <td>
+                                        {% if scheduler_status['lock_file_exists'] %}
+                                            <span class="text-success"><i class="fas fa-lock"></i> 存在</span>
+                                        {% else %}
+                                            <span class="text-warning"><i class="fas fa-unlock"></i> 不存在</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -7357,7 +7548,7 @@ def admin_push():
     </body>
     </html>
     """
-    return render_template_string(template, stats=stats)
+    return render_template_string(template, stats=stats, scheduler_status=scheduler_status)
 
 @app.route('/admin/logs')
 @admin_required
@@ -7923,12 +8114,37 @@ def scheduler_status():
 def admin_test_scheduler():
     """测试调度器推送功能"""
     try:
-        # 立即执行一次推送检查
+        # 记录测试调用
+        app.logger.info(f"[管理员] {current_user.email} 触发手动调度器测试")
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 手动测试调度器', current_user.id, request.remote_addr)
+        
+        # 检查调度器状态
+        if not scheduler.running:
+            flash('调度器未运行，正在尝试初始化...', 'admin')
+            try:
+                init_scheduler()
+                if scheduler.running:
+                    flash('调度器初始化成功', 'admin')
+                else:
+                    flash('调度器初始化失败', 'admin')
+                    return redirect(url_for('admin_push'))
+            except Exception as e:
+                flash(f'调度器初始化失败: {str(e)}', 'admin')
+                return redirect(url_for('admin_push'))
+        
+        # 立即执行一次推送检查（模拟调度器触发）
+        current_time = beijing_now()
+        app.logger.info(f"[手动测试] 开始推送检查 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
         with app.app_context():
             check_and_push_articles()
-        flash('测试推送检查已执行，请查看系统日志了解详情', 'admin')
+        
+        flash('调度器测试执行完成，请查看日志了解详细结果。如有用户符合推送条件会立即推送。', 'admin')
+        app.logger.info("[手动测试] 推送检查执行完成")
+        
     except Exception as e:
-        flash(f'测试推送失败: {str(e)}', 'admin')
+        app.logger.error(f"[手动测试] 调度器测试失败: {e}")
+        flash(f'调度器测试失败: {str(e)}', 'admin')
     
     return redirect(url_for('admin_push'))
 

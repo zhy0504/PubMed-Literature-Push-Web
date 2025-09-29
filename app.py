@@ -423,7 +423,7 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(128))
     is_admin = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=beijing_utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # 推送相关字段
     push_method = db.Column(db.String(20), default='email')  # email, wechat, both
@@ -509,7 +509,7 @@ class Subscription(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     keywords = db.Column(db.String(500), nullable=False)
-    created_at = db.Column(db.DateTime, default=beijing_utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_active = db.Column(db.Boolean, default=True)
     last_search = db.Column(db.DateTime)
     
@@ -637,7 +637,7 @@ class UserArticle(db.Model):
 # 系统日志模型
 class SystemLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=beijing_utcnow)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     level = db.Column(db.String(10), nullable=False)  # INFO, WARNING, ERROR
     module = db.Column(db.String(50), nullable=False)
     message = db.Column(db.String(500), nullable=False)
@@ -651,7 +651,7 @@ class PasswordResetToken(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     token = db.Column(db.String(100), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=beijing_utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     expires_at = db.Column(db.DateTime, nullable=False)
     used = db.Column(db.Boolean, default=False)
     
@@ -671,7 +671,7 @@ class SystemSetting(db.Model):
     value = db.Column(db.Text, nullable=False)
     description = db.Column(db.String(200), nullable=True)
     category = db.Column(db.String(50), nullable=False, default='general')
-    updated_at = db.Column(db.DateTime, default=beijing_utcnow, onupdate=beijing_utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     @staticmethod
     def get_setting(key, default=None):
@@ -710,7 +710,7 @@ class MailConfig(db.Model):
     daily_limit = db.Column(db.Integer, default=100)  # 每日发送限制
     current_count = db.Column(db.Integer, default=0)  # 今日已发送数量
     last_used = db.Column(db.DateTime)  # 最后使用时间
-    created_at = db.Column(db.DateTime, default=beijing_utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def can_send(self):
         """检查是否可以发送邮件"""
@@ -743,8 +743,8 @@ class AISetting(db.Model):
     base_url = db.Column(db.String(200), nullable=False)  # API接入点
     api_key = db.Column(db.Text, nullable=False)  # API密钥(加密存储)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=beijing_utcnow)
-    updated_at = db.Column(db.DateTime, default=beijing_utcnow, onupdate=beijing_utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # 关联关系
     models = db.relationship('AIModel', backref='provider', lazy=True, cascade='all, delete-orphan')
@@ -782,7 +782,7 @@ class AIModel(db.Model):
     model_id = db.Column(db.String(100), nullable=False)  # API标识符
     model_type = db.Column(db.String(20), nullable=False)  # query_builder, translator, general
     is_available = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=beijing_utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 # AI提示词模板表
 class AIPromptTemplate(db.Model):
@@ -790,8 +790,8 @@ class AIPromptTemplate(db.Model):
     template_type = db.Column(db.String(20), nullable=False)  # query_builder, translator
     prompt_content = db.Column(db.Text, nullable=False)
     is_default = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=beijing_utcnow)
-    updated_at = db.Column(db.DateTime, default=beijing_utcnow, onupdate=beijing_utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     @staticmethod
     def get_default_prompt(template_type):
@@ -10319,9 +10319,46 @@ def update_subscription(subscription_id):
 
 if __name__ == '__main__':
     with app.app_context():
-        db.create_all()
+        # 确保所有模型都正确定义
+        print("开始数据库初始化...")
         
-        # 检查并修复数据库表结构
+        # 验证Article模型是否包含所有必需字段
+        article_columns = [column.name for column in Article.__table__.columns]
+        required_fields = ['abstract_cn', 'brief_intro', 'issn', 'eissn']
+        missing_fields = [field for field in required_fields if field not in article_columns]
+        
+        if missing_fields:
+            print(f"错误：Article模型缺少字段: {missing_fields}")
+            print("请检查模型定义...")
+        else:
+            print("✓ Article模型包含所有必需字段")
+        
+        # 删除现有数据库文件以确保完全重新创建
+        import os
+        db_path = 'pubmed_app.db'
+        if os.path.exists(db_path):
+            print(f"删除现有数据库文件: {db_path}")
+            os.remove(db_path)
+        
+        # 创建所有表
+        print("创建数据库表...")
+        db.create_all()
+        print("✓ 数据库表创建完成")
+        
+        # 验证创建的表结构
+        from sqlalchemy import inspect
+        inspector = inspect(db.engine)
+        actual_columns = {col['name'] for col in inspector.get_columns('article')}
+        
+        print(f"Article表实际包含的字段: {sorted(actual_columns)}")
+        
+        for field in required_fields:
+            if field in actual_columns:
+                print(f"✓ {field} 字段存在")
+            else:
+                print(f"✗ {field} 字段缺失")
+        
+        # 原有的结构检查和修复函数保持不变
         def check_and_fix_database_schema():
             """检查并修复数据库表结构与模型定义的一致性"""
             try:

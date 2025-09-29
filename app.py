@@ -1965,27 +1965,38 @@ class AIService:
         return None
 
     def get_brief_intro_model(self):
-        """获取文献简介模型"""
-        # 获取配置的简介提供商和模型
+        """获取文献简介模型 - 优先独立配置，自动继承翻译配置"""
+        # 1. 尝试获取专门的简介模型配置
         intro_provider_id = SystemSetting.get_setting('ai_brief_intro_provider_id')
         intro_model_id = SystemSetting.get_setting('ai_brief_intro_model_id')
         
-        if not intro_provider_id or not intro_model_id:
-            # 如果没有配置专门的简介模型，尝试使用翻译模型
-            return self.get_configured_model('translator')
+        if intro_provider_id and intro_model_id:
+            try:
+                model = AIModel.query.filter_by(
+                    id=int(intro_model_id),
+                    provider_id=int(intro_provider_id),
+                    is_available=True
+                ).first()
+                
+                if model and model.provider.is_active:
+                    app.logger.info(f"使用专门配置的简介模型: {model.provider.name}/{model.model_id}")
+                    return {
+                        'provider': model.provider,
+                        'model': model.model_id
+                    }
+            except (ValueError, AttributeError):
+                app.logger.warning(f"简介模型配置无效，尝试继承翻译配置")
         
-        try:
-            model = AIModel.query.filter_by(
-                id=int(intro_model_id),
-                provider_id=int(intro_provider_id),
-                is_available=True
-            ).first()
+        # 2. 自动继承翻译模型配置
+        app.logger.info("未配置专门的简介模型，继承翻译模型配置")
+        translator_model = self.get_configured_model('translator')
+        if translator_model:
+            app.logger.info(f"继承翻译配置: 提供商={translator_model.provider.name}, 模型={translator_model.model_id}")
+            return {
+                'provider': translator_model.provider,
+                'model': translator_model.model_id
+            }
             
-            if model and model.provider.is_active:
-                return model
-        except (ValueError, AttributeError):
-            pass
-        
         return None
 
     def get_brief_intro_prompt(self):
@@ -2338,7 +2349,7 @@ class AIService:
             return None
 
     def batch_generate_brief_intros(self, articles):
-        """批量生成文献简介"""
+        """批量生成文献简介 - 真正的批量API调用"""
         try:
             # 检查是否启用AI简介功能
             brief_intro_enabled = SystemSetting.get_setting('ai_brief_intro_enabled', 'false') == 'true'
@@ -2346,7 +2357,7 @@ class AIService:
                 app.logger.info("AI文献简介功能未启用")
                 return False
             
-            # 获取配置的简介模型
+            # 获取配置的简介模型（继承翻译配置）
             intro_model = self.get_brief_intro_model()
             if not intro_model:
                 app.logger.warning("未找到或未配置文献简介模型")
@@ -2359,23 +2370,80 @@ class AIService:
                 app.logger.info("没有需要生成简介的文献")
                 return True
             
-            # 获取批处理设置
-            batch_size = int(SystemSetting.get_setting('ai_brief_intro_batch_size', '10'))
-            batch_delay = float(SystemSetting.get_setting('ai_brief_intro_batch_delay', '2.0'))
+            # 继承翻译配置的批处理设置
+            batch_size = int(SystemSetting.get_setting('ai_translation_batch_size', '20'))
+            batch_delay = int(SystemSetting.get_setting('ai_translation_batch_delay', '3'))
             
             app.logger.info(f"开始批量生成 {len(articles_need_intro)} 篇文献简介，批次大小: {batch_size}, 间隔: {batch_delay}秒")
             
-            # 分批处理
+            # 分批处理 - 真正的批量API调用
             for i in range(0, len(articles_need_intro), batch_size):
                 batch = articles_need_intro[i:i+batch_size]
                 
-                for article in batch:
-                    brief_intro = self.generate_brief_intro(article.title, article.abstract)
-                    if brief_intro:
-                        article.brief_intro = brief_intro
+                # 构建批量请求内容
+                batch_content = []
+                for idx, article in enumerate(batch):
+                    abstract = article.abstract or "无摘要"
+                    batch_content.append(f"文献{idx+1}:")
+                    batch_content.append(f"标题：{article.title}")
+                    batch_content.append(f"摘要：{abstract}")
+                    batch_content.append("")  # 空行分隔
                 
-                # 保存批次结果
-                db.session.commit()
+                # 获取简介提示词模板
+                prompt_template = self.get_brief_intro_prompt()
+                
+                # 修改提示词支持批量处理
+                batch_prompt = f"""请为以下 {len(batch)} 篇医学文献分别生成一句话简介，要求：
+1. 简洁明了，每个简介不超过50个中文字符
+2. 突出文献的核心发现或方法
+3. 使用通俗易懂的语言，避免过于复杂的医学术语
+4. 按顺序返回，格式为：简介1|简介2|简介3...（用|分隔）
+5. 只返回简介内容，不要其他文字
+
+{chr(10).join(batch_content)}"""
+                
+                try:
+                    # 调用AI API进行批量生成
+                    client = self.create_openai_client(intro_model['provider'])
+                    if not client:
+                        app.logger.error("无法创建AI客户端")
+                        continue
+                    
+                    response = client.chat.completions.create(
+                        model=intro_model['model'],
+                        messages=[
+                            {"role": "system", "content": "你是一个专业的医学文献分析助手。"},
+                            {"role": "user", "content": batch_prompt}
+                        ],
+                        max_tokens=2048,
+                        temperature=0.3
+                    )
+                    
+                    batch_result = response.choices[0].message.content.strip()
+                    
+                    # 解析批量结果
+                    brief_intros = self._parse_batch_brief_intro_result(batch_result, len(batch))
+                    
+                    # 分配给对应的文章
+                    for j, article in enumerate(batch):
+                        if j < len(brief_intros) and brief_intros[j].strip():
+                            article.brief_intro = brief_intros[j].strip()
+                    
+                    # 保存批次结果
+                    db.session.commit()
+                    app.logger.info(f"批次 {i//batch_size + 1} 简介生成完成，处理了 {len(batch)} 篇文献")
+                    
+                except Exception as e:
+                    app.logger.error(f"批次 {i//batch_size + 1} 简介生成失败: {str(e)}")
+                    # 失败时回退到单篇处理
+                    for article in batch:
+                        try:
+                            brief_intro = self.generate_brief_intro(article.title, article.abstract)
+                            if brief_intro:
+                                article.brief_intro = brief_intro
+                        except:
+                            pass
+                    db.session.commit()
                 
                 # 批次间延迟
                 if i + batch_size < len(articles_need_intro):
@@ -2387,6 +2455,31 @@ class AIService:
         except Exception as e:
             app.logger.error(f"批量简介生成失败: {str(e)}")
             return False
+    
+    def _parse_batch_brief_intro_result(self, result_text, expected_count):
+        """解析批量简介生成结果"""
+        try:
+            # 按|分隔
+            intros = result_text.split('|')
+            
+            # 清理和验证结果
+            cleaned_intros = []
+            for intro in intros:
+                intro = intro.strip()
+                if intro:
+                    # 移除可能的序号前缀
+                    intro = re.sub(r'^[简介]*\d+[：:：]\s*', '', intro)
+                    cleaned_intros.append(intro)
+            
+            # 确保返回期望数量的结果
+            while len(cleaned_intros) < expected_count:
+                cleaned_intros.append("")
+            
+            return cleaned_intros[:expected_count]
+            
+        except Exception as e:
+            app.logger.error(f"解析批量简介结果失败: {str(e)}")
+            return [""] * expected_count
     
     def test_connection(self, base_url, api_key):
         """测试AI连接"""
@@ -7685,55 +7778,14 @@ def change_password():
 @app.route('/admin/push')
 @admin_required
 def admin_push():
-    """推送管理页面"""
-    # 获取调度器状态
+    """推送管理页面 - 简化单worker版本"""
+    # 简化的调度器状态 - 只保留核心信息
     scheduler_status = {
         'running': scheduler.running,
         'jobs': len(scheduler.get_jobs()) if scheduler.running else 0,
-        'lock_file_exists': os.path.exists('/app/data/scheduler.lock'),
-        'current_pid': os.getpid(),
-        'timezone': SYSTEM_TIMEZONE,  # 添加时区信息
-        'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')  # 添加当前时间
+        'timezone': SYSTEM_TIMEZONE,
+        'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')
     }
-    
-    # 如果锁文件存在，读取PID和心跳信息
-    if scheduler_status['lock_file_exists']:
-        try:
-            with open('/app/data/scheduler.lock', 'r') as f:
-                content = f.read().strip()
-                try:
-                    # 尝试解析JSON格式（新格式）
-                    import json
-                    import time
-                    lock_data = json.loads(content)
-                    scheduler_status['scheduler_pid'] = lock_data.get('pid')
-                    scheduler_status['start_time'] = lock_data.get('start_time', 0)
-                    scheduler_status['last_heartbeat'] = lock_data.get('last_heartbeat', 0)
-                    scheduler_status['hostname'] = lock_data.get('hostname', 'unknown')
-                    
-                    # 计算心跳状态
-                    current_time = time.time()
-                    if scheduler_status['last_heartbeat']:
-                        heartbeat_age = current_time - scheduler_status['last_heartbeat']
-                        if heartbeat_age > 300:  # 5分钟
-                            scheduler_status['heartbeat_status'] = f'超时 ({int(heartbeat_age/60)}分钟前)'
-                        elif heartbeat_age > 60:  # 1分钟
-                            scheduler_status['heartbeat_status'] = f'延迟 ({int(heartbeat_age)}秒前)'
-                        else:
-                            scheduler_status['heartbeat_status'] = '正常'
-                    else:
-                        scheduler_status['heartbeat_status'] = '无心跳'
-                        
-                except json.JSONDecodeError:
-                    # 兼容旧格式（纯PID）
-                    scheduler_status['scheduler_pid'] = int(content)
-                    scheduler_status['heartbeat_status'] = '旧格式锁文件'
-        except:
-            scheduler_status['scheduler_pid'] = None
-            scheduler_status['heartbeat_status'] = '读取失败'
-    else:
-        scheduler_status['scheduler_pid'] = None
-        scheduler_status['heartbeat_status'] = '无锁文件'
     
     # 获取下次执行时间
     if scheduler.running:
@@ -7844,11 +7896,11 @@ def admin_push():
                 </div>
             </div>
             
-            <!-- 调度器详细状态 -->
+            <!-- 调度器详细状态 - 简化版本 -->
             <div class="card mb-4">
                 <div class="card-header">
                     <h5>
-                        <i class="fas fa-cogs"></i> 调度器状态详情
+                        <i class="fas fa-cogs"></i> 调度器状态
                         {% if scheduler_status['running'] %}
                             <span class="badge bg-success ms-2">运行中</span>
                         {% else %}
@@ -7882,55 +7934,6 @@ def admin_push():
                         </div>
                         <div class="col-md-6">
                             <table class="table table-sm">
-                                <tr>
-                                    <td><strong>当前进程PID:</strong></td>
-                                    <td>{{ scheduler_status['current_pid'] }}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>调度器进程PID:</strong></td>
-                                    <td>
-                                        {% if scheduler_status['scheduler_pid'] %}
-                                            {{ scheduler_status['scheduler_pid'] }}
-                                            {% if scheduler_status['scheduler_pid'] == scheduler_status['current_pid'] %}
-                                                <span class="text-success">(本进程)</span>
-                                            {% else %}
-                                                <span class="text-info">(其他进程)</span>
-                                            {% endif %}
-                                        {% else %}
-                                            <span class="text-muted">无锁文件</span>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td><strong>锁文件状态:</strong></td>
-                                    <td>
-                                        {% if scheduler_status['lock_file_exists'] %}
-                                            <span class="text-success"><i class="fas fa-lock"></i> 存在</span>
-                                        {% else %}
-                                            <span class="text-warning"><i class="fas fa-unlock"></i> 不存在</span>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td><strong>心跳状态:</strong></td>
-                                    <td>
-                                        {% if scheduler_status['heartbeat_status'] == '正常' %}
-                                            <span class="text-success"><i class="fas fa-heartbeat"></i> {{ scheduler_status['heartbeat_status'] }}</span>
-                                        {% elif scheduler_status['heartbeat_status'] == '延迟' or '秒前' in scheduler_status['heartbeat_status'] %}
-                                            <span class="text-warning"><i class="fas fa-exclamation-triangle"></i> {{ scheduler_status['heartbeat_status'] }}</span>
-                                        {% elif scheduler_status['heartbeat_status'] == '超时' or '分钟前' in scheduler_status['heartbeat_status'] %}
-                                            <span class="text-danger"><i class="fas fa-times-circle"></i> {{ scheduler_status['heartbeat_status'] }}</span>
-                                        {% else %}
-                                            <span class="text-muted"><i class="fas fa-question-circle"></i> {{ scheduler_status['heartbeat_status'] }}</span>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                                {% if scheduler_status['hostname'] %}
-                                <tr>
-                                    <td><strong>主机名:</strong></td>
-                                    <td>{{ scheduler_status['hostname'] }}</td>
-                                </tr>
-                                {% endif %}
                                 <tr>
                                     <td><strong>系统时区:</strong></td>
                                     <td>

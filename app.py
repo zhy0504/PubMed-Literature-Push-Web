@@ -1515,14 +1515,6 @@ class SimpleLiteraturePushService:
                         </div>
                     '''
                 
-                # 文献简介（如果有）
-                if hasattr(article, 'brief_intro') and article.brief_intro:
-                    abstract_html += f'''
-                        <div class="abstract-section">
-                            <div class="abstract-title">💡 简介</div>
-                            <div class="abstract-content brief-intro">{article.brief_intro}</div>
-                        </div>
-                    '''
             
             # 获取发表日期
             pub_date = ""
@@ -1665,9 +1657,6 @@ class SimpleLiteraturePushService:
                 if hasattr(article, 'abstract_translation') and article.abstract_translation:
                     content += f"   中文摘要: {article.abstract_translation}\\n"
                 
-                # 添加文献简介（如果有）
-                if hasattr(article, 'brief_intro') and article.brief_intro:
-                    content += f"   简介: {article.brief_intro}\\n"
             
             content += "\\n"
         
@@ -1875,17 +1864,32 @@ def load_user(user_id):
 # AI服务模块
 class AIService:
     def __init__(self):
-        self.default_query_prompt = """你是一个专业的医学文献检索专家。请根据用户提供的关键词，生成规范的PubMed检索式。
+        self.default_query_prompt = """# 任务：构建专业级PubMed文献检索式
 
-要求：
-1. 使用适当的MeSH术语和自由词
-2. 合理使用布尔运算符(AND, OR)
-3. 使用[Title/Abstract]字段限定
-4. 考虑同义词和相关术语
-5. 只返回最终的PubMed检索式，不要任何解释说明或分析过程
-6. 不要包含"检索式："等前缀
+## 1. 角色与目标
+你将扮演一位精通PubMed检索策略的顶级医学信息专家和策略决策者，你的核心目标是根据用户提供的自然语言关键词 `{keywords}`，通过严谨的PICO框架进行结构化分析，并以"极致查准"为首要策略，仅在用户明确要求时切换为"查全优先"，最终生成一个逻辑严谨、覆盖周全、可直接在PubMed中执行的、符合系统评价（Systematic Review）标准的高质量检索式。
 
-用户关键词: {keywords}"""
+## 2. 背景与上下文
+医学研究人员、临床医生及学生在科研或实践中，需要快速、准确地从PubMed数据库获取高质量文献。然而，构建一个兼具高查全率（Recall）和高查准率（Precision）的检索式需要专业的知识和技巧，而用户通常缺乏这方面的训练。因此，需要你的专业能力将他们的研究问题转化为一个高效、严谨的检索方案。
+
+## 3. 关键步骤
+在你的创作过程中，请遵循以下内部步骤来构思和打磨作品：
+1.  **核心概念识别与PICO解构**: 首先，识别用户输入 `{keywords}` 中的所有核心概念。然后，将这些概念系统性地映射到PICO框架（P=人群/问题, I=干预/关注点, C=比较, O=结局），并优先聚焦于构建P和I的检索模块。
+2.  **概念词汇扩展**: 对每个核心概念（尤其是P和I），进行系统的词汇扩展，包括但不限于：MeSH官方入口词、同义词、近义词、相关术语、缩写、药物/设备商品名、拼写变体（如英美差异）和单复数形式。这是确保覆盖周全的关键。
+3.  **智能策略决策**: 分析用户意图，默认采用"极致查准"策略。仅当用户明确表达需要更广泛的结果（如包含"太少"、"找不到"、"更全面"）时，才切换至"查全优先"策略。
+4.  **分策略构建检索模块**: 根据上一步的决策执行相应的构建逻辑。
+    - **极致查准模式 (默认)**: 彻底重构检索式为"双重狙击"结构：`((P_mesh[Majr] AND I_mesh[Majr]) OR (P_freetext[ti] AND I_freetext[ti]))`。此结构通过 `OR` 连接"主要主题模块"（使用扩展后的MeSH词作为焦点）和"标题模块"（使用扩展后的自由词在标题中进行精确匹配），以实现最高的精准度。
+    - **查全优先模式 (触发)**: 为每个核心概念（如P和I）创建独立的检索模块，模块内部使用 `OR` 连接其对应的所有MeSH词和扩展后的自由词 `(MeSH词[Mesh] OR 自由词1[tiab] OR 自由词2[tiab]...)`，然后使用 `AND` 连接各模块。
+5.  **生成最终检索式**: 组合所有模块，生成一个语法正确、无任何多余解释的完整PubMed检索式。
+
+## 4. 输出要求
+- **格式**: 纯文本，仅包含最终的PubMed检索式字符串。
+- **风格**: 专业、严谨、语法精确。
+- **约束**:
+    - 必须确保检索式语法完全符合PubMed官方规范，可直接复制使用。
+    - 检索词的选择必须系统且周全：MeSH词需准确选取，自由词部分必须全面覆盖在"概念词汇扩展"步骤中分析出的同义词、近义词、缩写、拼写变体及单复数形式。
+    - 每个概念模块必须使用括号 `()` 清晰地组织，确保布尔运算的优先级正确无误。
+    - **最终输出**: 你的最终回复应仅包含最终成果本身，不得包含任何步骤说明、分析或其他无关内容。"""
 
         self.default_translation_prompt = """请将以下英文医学摘要准确翻译成中文，要求：
 1. 保持专业术语的准确性
@@ -7836,12 +7840,55 @@ def admin_push():
         'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')
     }
     
-    # 获取下次执行时间
+    # 获取下次执行时间并自动检测异常
     if scheduler_running and scheduler.running:
         jobs = scheduler.get_jobs()
         if jobs:
             next_run_time = jobs[0].next_run_time
-            scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S') if next_run_time else '未知'
+            if next_run_time:
+                # 确保时间显示使用应用程序时区
+                if next_run_time.tzinfo is None:
+                    next_run_time = APP_TIMEZONE.localize(next_run_time)
+                elif next_run_time.tzinfo != APP_TIMEZONE:
+                    next_run_time = next_run_time.astimezone(APP_TIMEZONE)
+                
+                # 自动检测时间异常：下次执行时间是否在过去
+                current_time = get_current_time()
+                if next_run_time < current_time:
+                    app.logger.warning(f"[调度器自检] 检测到时间异常：下次执行时间 {next_run_time} 早于当前时间 {current_time}")
+                    try:
+                        # 自动重启调度器修复问题
+                        app.logger.info("[调度器自检] 开始自动重启调度器")
+                        scheduler.shutdown(wait=False)
+                        init_scheduler()
+                        
+                        if scheduler.running:
+                            app.logger.info("[调度器自检] 自动重启成功")
+                            # 重新获取修复后的时间
+                            updated_jobs = scheduler.get_jobs()
+                            if updated_jobs:
+                                updated_next_run = updated_jobs[0].next_run_time
+                                if updated_next_run:
+                                    if updated_next_run.tzinfo is None:
+                                        updated_next_run = APP_TIMEZONE.localize(updated_next_run)
+                                    elif updated_next_run.tzinfo != APP_TIMEZONE:
+                                        updated_next_run = updated_next_run.astimezone(APP_TIMEZONE)
+                                    scheduler_status['next_run'] = updated_next_run.strftime('%Y-%m-%d %H:%M:%S')
+                                    scheduler_status['auto_fixed'] = True
+                                else:
+                                    scheduler_status['next_run'] = '未知'
+                            else:
+                                scheduler_status['next_run'] = '无任务'
+                        else:
+                            app.logger.error("[调度器自检] 自动重启失败")
+                            scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S') + ' (异常)'
+                    except Exception as e:
+                        app.logger.error(f"[调度器自检] 自动修复失败: {e}")
+                        scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S') + ' (异常)'
+                else:
+                    scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                scheduler_status['next_run'] = '未知'
         else:
             scheduler_status['next_run'] = '无任务'
     else:
@@ -7977,7 +8024,14 @@ def admin_push():
                                 </tr>
                                 <tr>
                                     <td><strong>下次执行:</strong></td>
-                                    <td>{{ scheduler_status['next_run'] }}</td>
+                                    <td>
+                                        {{ scheduler_status['next_run'] }}
+                                        {% if scheduler_status.get('auto_fixed') %}
+                                            <span class="badge bg-success ms-2">
+                                                <i class="fas fa-check-circle"></i> 已自动修复
+                                            </span>
+                                        {% endif %}
+                                    </td>
                                 </tr>
                             </table>
                         </div>
@@ -8026,12 +8080,17 @@ def admin_push():
                                     <i class="fas fa-clock"></i> 测试调度器
                                 </button>
                             </form>
+                            <form method="POST" action="/admin/push/restart-scheduler" style="display: inline;" class="ms-2">
+                                <button type="submit" class="btn btn-outline-info" onclick="return confirm('确定要重启调度器吗？这将重新加载调度器配置。')">
+                                    <i class="fas fa-sync"></i> 重启调度器
+                                </button>
+                            </form>
                             <form method="POST" action="/admin/push/reset-scheduler" style="display: inline;" class="ms-2">
                                 <button type="submit" class="btn btn-outline-warning" onclick="return confirm('确定要重置调度器吗？这将清理锁文件并重新启动调度器。')">
                                     <i class="fas fa-redo"></i> 重置调度器
                                 </button>
                             </form>
-                            <small class="text-muted d-block mt-2">测试：模拟定时任务执行 | 重置：清理锁文件并重启调度器</small>
+                            <small class="text-muted d-block mt-2">测试：模拟定时任务执行 | 重启：重新加载配置 | 重置：清理锁文件并重启调度器</small>
                         </div>
                     </div>
                     
@@ -8719,10 +8778,20 @@ def scheduler_status():
         jobs = []
         if scheduler.running:
             for job in scheduler.get_jobs():
+                next_run_time = job.next_run_time
+                next_run_str = '未设置'
+                if next_run_time:
+                    # 确保时间显示使用应用程序时区
+                    if next_run_time.tzinfo is None:
+                        next_run_time = APP_TIMEZONE.localize(next_run_time)
+                    elif next_run_time.tzinfo != APP_TIMEZONE:
+                        next_run_time = next_run_time.astimezone(APP_TIMEZONE)
+                    next_run_str = next_run_time.strftime('%Y-%m-%d %H:%M:%S')
+                
                 jobs.append({
                     'id': job.id,
                     'name': job.name,
-                    'next_run': job.next_run_time.strftime('%Y-%m-%d %H:%M:%S') if job.next_run_time else '未设置',
+                    'next_run': next_run_str,
                     'trigger': str(job.trigger)
                 })
         
@@ -8936,6 +9005,42 @@ def reset_scheduler():
     except Exception as e:
         log_activity('ERROR', 'admin', f'重置调度器失败: {str(e)}', current_user.id, request.remote_addr)
         flash(f'重置调度器失败: {str(e)}', 'admin')
+    
+    return redirect(url_for('admin_push'))
+
+@app.route('/admin/push/restart-scheduler', methods=['POST'])
+@admin_required
+def restart_scheduler():
+    """简单重启调度器"""
+    try:
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 重启调度器', current_user.id, request.remote_addr)
+        
+        # 停止当前调度器
+        if scheduler.running:
+            try:
+                scheduler.shutdown(wait=False)
+                app.logger.info("[调度器重启] 已停止运行中的调度器")
+            except Exception as e:
+                app.logger.warning(f"[调度器重启] 停止调度器失败: {e}")
+        
+        # 重新初始化调度器
+        try:
+            with app.app_context():
+                init_scheduler()
+            
+            if scheduler.running:
+                flash('调度器重启成功', 'admin')
+                app.logger.info("[调度器重启] 调度器重启成功")
+            else:
+                flash('调度器重启失败，请检查日志', 'admin')
+                app.logger.error("[调度器重启] 调度器重启失败")
+        except Exception as e:
+            flash(f'调度器重启失败: {str(e)}', 'admin')
+            app.logger.error(f"[调度器重启] 重启失败: {e}")
+        
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'重启调度器失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'重启调度器失败: {str(e)}', 'admin')
     
     return redirect(url_for('admin_push'))
 
@@ -10699,17 +10804,32 @@ if __name__ == '__main__':
             default_prompts = [
                 {
                     'template_type': 'query_builder',
-                    'prompt_content': """你是一个专业的医学文献检索专家。请根据用户提供的关键词，生成规范的PubMed检索式。
+                    'prompt_content': """# 任务：构建专业级PubMed文献检索式
 
-要求：
-1. 使用适当的MeSH术语和自由词
-2. 合理使用布尔运算符(AND, OR)
-3. 使用[Title/Abstract]字段限定
-4. 考虑同义词和相关术语
-5. 只返回检索式，不要其他解释
+## 1. 角色与目标
+你将扮演一位精通PubMed检索策略的顶级医学信息专家和策略决策者，你的核心目标是根据用户提供的自然语言关键词 `{keywords}`，通过严谨的PICO框架进行结构化分析，并以"极致查准"为首要策略，仅在用户明确要求时切换为"查全优先"，最终生成一个逻辑严谨、覆盖周全、可直接在PubMed中执行的、符合系统评价（Systematic Review）标准的高质量检索式。
 
-用户关键词: {keywords}
-检索式:""",
+## 2. 背景与上下文
+医学研究人员、临床医生及学生在科研或实践中，需要快速、准确地从PubMed数据库获取高质量文献。然而，构建一个兼具高查全率（Recall）和高查准率（Precision）的检索式需要专业的知识和技巧，而用户通常缺乏这方面的训练。因此，需要你的专业能力将他们的研究问题转化为一个高效、严谨的检索方案。
+
+## 3. 关键步骤
+在你的创作过程中，请遵循以下内部步骤来构思和打磨作品：
+1.  **核心概念识别与PICO解构**: 首先，识别用户输入 `{keywords}` 中的所有核心概念。然后，将这些概念系统性地映射到PICO框架（P=人群/问题, I=干预/关注点, C=比较, O=结局），并优先聚焦于构建P和I的检索模块。
+2.  **概念词汇扩展**: 对每个核心概念（尤其是P和I），进行系统的词汇扩展，包括但不限于：MeSH官方入口词、同义词、近义词、相关术语、缩写、药物/设备商品名、拼写变体（如英美差异）和单复数形式。这是确保覆盖周全的关键。
+3.  **智能策略决策**: 分析用户意图，默认采用"极致查准"策略。仅当用户明确表达需要更广泛的结果（如包含"太少"、"找不到"、"更全面"）时，才切换至"查全优先"策略。
+4.  **分策略构建检索模块**: 根据上一步的决策执行相应的构建逻辑。
+    - **极致查准模式 (默认)**: 彻底重构检索式为"双重狙击"结构：`((P_mesh[Majr] AND I_mesh[Majr]) OR (P_freetext[ti] AND I_freetext[ti]))`。此结构通过 `OR` 连接"主要主题模块"（使用扩展后的MeSH词作为焦点）和"标题模块"（使用扩展后的自由词在标题中进行精确匹配），以实现最高的精准度。
+    - **查全优先模式 (触发)**: 为每个核心概念（如P和I）创建独立的检索模块，模块内部使用 `OR` 连接其对应的所有MeSH词和扩展后的自由词 `(MeSH词[Mesh] OR 自由词1[tiab] OR 自由词2[tiab]...)`，然后使用 `AND` 连接各模块。
+5.  **生成最终检索式**: 组合所有模块，生成一个语法正确、无任何多余解释的完整PubMed检索式。
+
+## 4. 输出要求
+- **格式**: 纯文本，仅包含最终的PubMed检索式字符串。
+- **风格**: 专业、严谨、语法精确。
+- **约束**:
+    - 必须确保检索式语法完全符合PubMed官方规范，可直接复制使用。
+    - 检索词的选择必须系统且周全：MeSH词需准确选取，自由词部分必须全面覆盖在"概念词汇扩展"步骤中分析出的同义词、近义词、缩写、拼写变体及单复数形式。
+    - 每个概念模块必须使用括号 `()` 清晰地组织，确保布尔运算的优先级正确无误。
+    - **最终输出**: 你的最终回复应仅包含最终成果本身，不得包含任何步骤说明、分析或其他无关内容。""",
                     'is_default': True
                 },
                 {
@@ -10907,7 +11027,7 @@ def create_scheduler_lock(pid):
 
 # 添加定期心跳更新
 def update_scheduler_heartbeat():
-    """更新调度器心跳"""
+    """更新调度器心跳并执行自检"""
     import time
     import json
     
@@ -10918,6 +11038,7 @@ def update_scheduler_heartbeat():
     current_pid = os.getpid()
     
     try:
+        # 1. 更新心跳
         if os.path.exists(lock_file_path):
             with open(lock_file_path, 'r') as f:
                 lock_data = json.loads(f.read())
@@ -10927,8 +11048,64 @@ def update_scheduler_heartbeat():
                 lock_data['last_heartbeat'] = time.time()
                 with open(lock_file_path, 'w') as f:
                     json.dump(lock_data, f)
+        
+        # 2. 每5分钟执行一次时间自检
+        if time.time() % 300 < 60:  # 每5分钟内的第一分钟执行
+            scheduler_health_check()
+            
     except:
         pass  # 心跳更新失败不影响主要功能
+
+def scheduler_health_check():
+    """调度器健康检查和自动修复"""
+    try:
+        if not scheduler.running:
+            return
+            
+        jobs = scheduler.get_jobs()
+        if not jobs:
+            return
+            
+        # 检查主推送任务的下次执行时间
+        push_job = None
+        for job in jobs:
+            if job.id == 'push_check':
+                push_job = job
+                break
+                
+        if not push_job or not push_job.next_run_time:
+            return
+            
+        next_run_time = push_job.next_run_time
+        if next_run_time.tzinfo is None:
+            next_run_time = APP_TIMEZONE.localize(next_run_time)
+        elif next_run_time.tzinfo != APP_TIMEZONE:
+            next_run_time = next_run_time.astimezone(APP_TIMEZONE)
+            
+        current_time = get_current_time()
+        
+        # 如果下次执行时间超过12小时前，认为是时间异常
+        time_diff = (current_time - next_run_time).total_seconds()
+        if time_diff > 43200:  # 12小时
+            app.logger.warning(f"[调度器健康检查] 发现时间异常：下次执行时间落后 {time_diff/3600:.1f} 小时")
+            
+            # 自动重启调度器
+            app.logger.info("[调度器健康检查] 执行自动修复")
+            scheduler.shutdown(wait=False)
+            
+            # 稍等片刻再重启
+            time.sleep(1)
+            init_scheduler()
+            
+            if scheduler.running:
+                app.logger.info("[调度器健康检查] 自动修复完成")
+                # 记录修复事件
+                log_activity('INFO', 'system', '调度器时间异常已自动修复', None, 'localhost')
+            else:
+                app.logger.error("[调度器健康检查] 自动修复失败")
+                
+    except Exception as e:
+        app.logger.error(f"[调度器健康检查] 检查失败: {e}")
 
 # 应用初始化执行
 try:

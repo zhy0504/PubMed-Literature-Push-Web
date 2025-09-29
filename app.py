@@ -9184,8 +9184,11 @@ def admin_system():
                                         <option value="24" {% if settings.push_check_frequency == '24' %}selected{% endif %}>每24小时检查一次</option>
                                     </select>
                                     <div class="form-text">
-                                        推送时间精度取决于检查频率。15分钟检查可确保不错过任何推送时间。<br>
-                                        <strong>注意</strong>：1小时检查只能推送整点时间(如9:00)，会错过非整点时间(如9:15、9:30)
+                                        推送时间精度取决于检查频率：<br>
+                                        • <strong>15分钟检查</strong>：可确保不错过任何推送时间（推荐）<br>
+                                        • <strong>30分钟检查</strong>：可覆盖大部分推送时间<br>  
+                                        • <strong>1小时检查</strong>：已优化为每15分钟检查，不会错过推送时间<br>
+                                        • <strong>2小时及以上</strong>：只能推送整点时间，会错过非整点时间
                                     </div>
                                 </div>
                                 <div class="mb-3">

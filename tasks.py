@@ -17,7 +17,8 @@ if current_dir not in sys.path:
 # 在任务执行时需要Flask应用上下文
 from flask import Flask
 from app import app, db, User, Subscription, beijing_now
-from app import handle_single_subscription as original_handle_single_subscription
+# 延迟导入避免循环导入问题
+# from app import handle_single_subscription as original_handle_single_subscription
 from app import log_activity, SystemSetting
 import logging
 
@@ -48,6 +49,9 @@ def process_subscription_push(subscription_id: int):
             
             start_time = datetime.datetime.now()
             logging.info(f"[RQ任务] 开始处理订阅 {subscription_id} (用户: {user.email})")
+            
+            # 延迟导入避免循环导入问题
+            from app import handle_single_subscription as original_handle_single_subscription
             
             # 调用原有的推送处理逻辑
             result = original_handle_single_subscription(subscription_id)

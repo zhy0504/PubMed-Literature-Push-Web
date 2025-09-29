@@ -10713,10 +10713,32 @@ def initialize_app():
     with app.app_context():
         print("🔄 应用初始化...")
         
+        # 获取实际数据库文件路径
+        db_url = os.environ.get('DATABASE_URL')
+        if not db_url:
+            db_path = os.path.abspath("pubmed_app.db")
+        else:
+            if db_url.startswith('sqlite:///'):
+                # 提取数据库文件路径
+                if db_url.startswith('sqlite:////'):
+                    # 绝对路径: sqlite:////app/data/pubmed_app.db
+                    db_path = db_url.replace('sqlite:///', '')
+                else:
+                    # 相对路径: sqlite:///pubmed_app.db
+                    db_path = db_url.replace('sqlite:///', '')
+                    if not os.path.isabs(db_path):
+                        db_path = os.path.abspath(db_path)
+            else:
+                print("✅ 使用非SQLite数据库，跳过文件检查")
+                return
+        
         # 检查数据库是否存在
-        if not os.path.exists('pubmed_app.db'):
-            print("⚠️  数据库不存在，请先运行初始化")
+        if not os.path.exists(db_path):
+            print(f"⚠️  数据库不存在: {db_path}")
+            print("⚠️  请先运行初始化")
             return
+        
+        print(f"✅ 数据库文件存在: {db_path}")
         
         # 简单验证关键表结构
         try:

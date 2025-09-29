@@ -8336,39 +8336,39 @@ def admin_push():
                     scheduler_status['next_run'] = '未知'
             else:
                 scheduler_status['next_run'] = '无任务'
-        else:
+        elif scheduler_running:
             # 跨进程检测到有调度器运行，但本进程调度器未运行
             scheduler_status['next_run'] = '其他进程运行中'
-    else:
-        # 调度器完全未运行，尝试自动启动
-        app.logger.info("[管理页面] 检测到调度器未运行，尝试自动启动")
-        try:
-            init_scheduler()
-            if scheduler.running:
-                app.logger.info("[管理页面] 调度器自动启动成功")
-                log_activity('INFO', 'system', '调度器通过管理页面自动启动', None, request.remote_addr)
-                # 重新获取状态
-                jobs = scheduler.get_jobs()
-                if jobs:
-                    next_run_time = jobs[0].next_run_time
-                    if next_run_time:
-                        if next_run_time.tzinfo is None:
-                            next_run_time = APP_TIMEZONE.localize(next_run_time)
-                        elif next_run_time.tzinfo != APP_TIMEZONE:
-                            next_run_time = next_run_time.astimezone(APP_TIMEZONE)
-                        scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S')
-                        scheduler_status['auto_started'] = True
+        else:
+            # 调度器完全未运行，尝试自动启动
+            app.logger.info("[管理页面] 检测到调度器未运行，尝试自动启动")
+            try:
+                init_scheduler()
+                if scheduler.running:
+                    app.logger.info("[管理页面] 调度器自动启动成功")
+                    log_activity('INFO', 'system', '调度器通过管理页面自动启动', None, request.remote_addr)
+                    # 重新获取状态
+                    jobs = scheduler.get_jobs()
+                    if jobs:
+                        next_run_time = jobs[0].next_run_time
+                        if next_run_time:
+                            if next_run_time.tzinfo is None:
+                                next_run_time = APP_TIMEZONE.localize(next_run_time)
+                            elif next_run_time.tzinfo != APP_TIMEZONE:
+                                next_run_time = next_run_time.astimezone(APP_TIMEZONE)
+                            scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S')
+                            scheduler_status['auto_started'] = True
+                        else:
+                            scheduler_status['next_run'] = '未知'
                     else:
-                        scheduler_status['next_run'] = '未知'
+                        scheduler_status['next_run'] = '无任务'
+                    scheduler_status['running'] = True
+                    scheduler_status['jobs'] = len(jobs) if jobs else 0
                 else:
-                    scheduler_status['next_run'] = '无任务'
-                scheduler_status['running'] = True
-                scheduler_status['jobs'] = len(jobs) if jobs else 0
-            else:
-                scheduler_status['next_run'] = '自动启动失败'
-        except Exception as e:
-            app.logger.error(f"[管理页面] 调度器自动启动失败: {e}")
-            scheduler_status['next_run'] = '调度器未运行'
+                    scheduler_status['next_run'] = '自动启动失败'
+            except Exception as e:
+                app.logger.error(f"[管理页面] 调度器自动启动失败: {e}")
+                scheduler_status['next_run'] = '调度器未运行'
     
     # 获取推送统计
     stats = {

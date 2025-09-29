@@ -27,6 +27,7 @@ from urllib.parse import quote
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import atexit
+import signal
 import os
 import csv
 import os
@@ -962,6 +963,182 @@ class SimpleLiteraturePushService:
         
         return results
     
+    def process_single_subscription(self, subscription_id):
+        """处理单个订阅的推送逻辑"""
+        try:
+            # 获取订阅信息
+            subscription = Subscription.query.get(subscription_id)
+            if not subscription or not subscription.is_active:
+                return {
+                    'subscription_id': subscription_id,
+                    'success': False,
+                    'error': 'Subscription not found or inactive'
+                }
+            
+            # 获取用户信息
+            user = subscription.user
+            if not user or not user.is_active:
+                return {
+                    'subscription_id': subscription_id,
+                    'success': False,
+                    'error': 'User not found or inactive'
+                }
+            
+            log_activity('INFO', 'scheduler', f'开始处理订阅 {subscription_id} (用户: {user.email}, 关键词: {subscription.keywords})')
+            
+            # 使用订阅的个人参数设置
+            filter_params = subscription.get_filter_params()
+            
+            # 搜索新文章
+            api = PubMedAPI()
+            
+            fetch_result = api.search_and_fetch_with_filter(
+                keywords=subscription.keywords,
+                max_results=min(filter_params['max_results'], int(SystemSetting.get_setting('push_max_articles', '10'))),
+                days_back=filter_params['days_back'],
+                jcr_filter=filter_params['jcr_filter'],
+                zky_filter=filter_params['zky_filter'],
+                exclude_no_issn=filter_params['exclude_no_issn'],
+                user_email=user.email
+            )
+            
+            # 检查是否有符合条件的文章
+            if fetch_result.get('filtered_count', 0) == 0:
+                log_activity('INFO', 'scheduler', f'订阅 {subscription_id} 无新文章')
+                # 更新订阅的最后搜索时间
+                subscription.last_search = beijing_now()
+                db.session.commit()
+                return {
+                    'subscription_id': subscription_id,
+                    'user_email': user.email,
+                    'keywords': subscription.keywords,
+                    'success': True,
+                    'articles_found': 0,
+                    'message': 'No new articles found'
+                }
+            
+            # 过滤已推送的文章并保存新文章
+            new_articles = []
+            for article_data in fetch_result.get('articles', []):
+                # 检查文章是否已存在
+                existing_article = Article.query.filter_by(pmid=article_data['pmid']).first()
+                
+                if not existing_article:
+                    # 保存新文章
+                    article = Article(
+                        pmid=article_data['pmid'],
+                        title=article_data['title'],
+                        authors=article_data['authors'],
+                        journal=article_data['journal'],
+                        pubmed_url=article_data['url'],
+                        abstract=article_data.get('abstract', ''),
+                        issn=article_data.get('issn', ''),
+                        eissn=article_data.get('eissn', ''),
+                    )
+                    db.session.add(article)
+                    db.session.flush()
+                else:
+                    # 使用已存在的文章，但更新ISSN信息（如果之前没有）
+                    article = existing_article
+                    
+                    # 检查并更新ISSN信息
+                    updated = False
+                    if not article.issn and article_data.get('issn'):
+                        article.issn = article_data.get('issn')
+                        updated = True
+                    if not article.eissn and article_data.get('eissn'):
+                        article.eissn = article_data.get('eissn')
+                        updated = True
+                    
+                    if updated:
+                        db.session.flush()
+                        log_activity('INFO', 'push', f'更新文章 {article.pmid} 的ISSN信息')
+                
+                # 检查用户是否已收到此文章推送
+                existing_user_article = UserArticle.query.filter_by(
+                    user_id=user.id, 
+                    article_id=article.id,
+                    subscription_id=subscription.id
+                ).first()
+                
+                if not existing_user_article:
+                    # 重新检查ISSN筛选条件（基于最新的文章数据）
+                    if filter_params['exclude_no_issn']:
+                        has_issn = bool(article.issn or article.eissn)
+                        if not has_issn:
+                            log_activity('INFO', 'push', f'跳过无ISSN文章: {article.pmid}')
+                            continue
+                    
+                    # 创建用户-文章关联
+                    user_article = UserArticle(
+                        user_id=user.id,
+                        article_id=article.id,
+                        subscription_id=subscription.id
+                    )
+                    db.session.add(user_article)
+                    new_articles.append(article)
+            
+            # 更新订阅的最后搜索时间
+            subscription.last_search = beijing_now()
+            db.session.commit()
+            
+            if not new_articles:
+                log_activity('INFO', 'scheduler', f'订阅 {subscription_id} 无新文章（筛选后）')
+                return {
+                    'subscription_id': subscription_id,
+                    'user_email': user.email,
+                    'keywords': subscription.keywords,
+                    'success': True,
+                    'articles_found': 0,
+                    'message': 'No new articles after filtering'
+                }
+            
+            # 使用AI翻译摘要（如果启用）
+            if SystemSetting.get_setting('ai_translation_enabled', 'false') == 'true':
+                try:
+                    log_activity('INFO', 'push', f'开始为订阅 {subscription_id} 的 {len(new_articles)} 篇文章进行AI翻译')
+                    ai_service.batch_translate_abstracts(new_articles)
+                    log_activity('INFO', 'push', f'订阅 {subscription_id} 的文章AI翻译完成')
+                except Exception as e:
+                    log_activity('WARNING', 'push', f'订阅 {subscription_id} 的AI翻译失败: {str(e)}')
+            
+            # 使用AI生成文献简介（如果启用）
+            if SystemSetting.get_setting('ai_brief_intro_enabled', 'false') == 'true':
+                try:
+                    log_activity('INFO', 'push', f'开始为订阅 {subscription_id} 的 {len(new_articles)} 篇文章生成AI简介')
+                    ai_service.batch_generate_brief_intros(new_articles)
+                    log_activity('INFO', 'push', f'订阅 {subscription_id} 的文章AI简介生成完成')
+                except Exception as e:
+                    log_activity('WARNING', 'push', f'订阅 {subscription_id} 的AI简介生成失败: {str(e)}')
+            
+            # 发送邮件通知
+            articles_by_subscription = {subscription.keywords: new_articles}
+            self._send_email_notification(user, new_articles, articles_by_subscription)
+            
+            # 更新用户最后推送时间（按订阅级别，用户可能有多个订阅在不同时间推送）
+            user.last_push = beijing_now()
+            db.session.commit()
+            
+            log_activity('INFO', 'scheduler', f'订阅 {subscription_id} 推送完成：发送了 {len(new_articles)} 篇新文章给用户 {user.email}')
+            
+            return {
+                'subscription_id': subscription_id,
+                'user_email': user.email,
+                'keywords': subscription.keywords,
+                'success': True,
+                'articles_found': len(new_articles),
+                'message': f'Sent {len(new_articles)} new articles'
+            }
+            
+        except Exception as e:
+            error_msg = f'处理订阅 {subscription_id} 失败: {str(e)}'
+            log_activity('ERROR', 'scheduler', error_msg)
+            return {
+                'subscription_id': subscription_id,
+                'success': False,
+                'error': error_msg
+            }
+    
     def _process_single_user(self, user):
         """处理单个用户的订阅"""
         subscriptions = Subscription.query.filter_by(user_id=user.id, is_active=True).all()
@@ -1671,6 +1848,31 @@ push_service = SimpleLiteraturePushService()
 # 初始化调度器（使用配置的时区）
 scheduler = BackgroundScheduler(timezone=APP_TIMEZONE)
 
+def shutdown_scheduler_safely():
+    """安全关闭调度器，防止线程池关闭异常"""
+    try:
+        if scheduler.running:
+            print("正在关闭调度器...")
+            # 停止接受新任务
+            scheduler.shutdown(wait=False)
+            print("调度器已关闭")
+    except Exception as e:
+        print(f"关闭调度器时出现异常: {e}")
+
+# 注册应用退出时的清理函数
+atexit.register(shutdown_scheduler_safely)
+
+# 信号处理函数
+def signal_handler(signum, frame):
+    """处理系统信号，确保优雅关闭"""
+    print(f"\\n收到信号 {signum}，正在优雅关闭...")
+    shutdown_scheduler_safely()
+    exit(0)
+
+# 注册信号处理器
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
 def init_scheduler():
     """初始化定时推送调度器（多worker安全版）"""
     # 多worker环境下，使用简单的运行状态检查避免重复初始化
@@ -1741,50 +1943,162 @@ def check_and_push_articles():
             app.logger.info(f"[调度器] 开始检查推送任务 - {current_time.strftime('%Y-%m-%d %H:%M:%S')} (PID: {os.getpid()})")
             print(f"[调度器] 检查推送任务 - {current_time.strftime('%Y-%m-%d %H:%M:%S')} (PID: {os.getpid()})")
             
-            # 获取所有活跃用户
-            users = User.query.filter_by(is_active=True).all()
-            app.logger.info(f"[调度器] 找到 {len(users)} 个活跃用户")
+            # 获取所有活跃订阅（按订阅推送的新逻辑）
+            subscriptions = Subscription.query.filter_by(is_active=True).join(User).filter_by(is_active=True).all()
+            
+            # 统计订阅分布信息
+            frequency_counts = {}
+            user_subscription_counts = {}
+            
+            for sub in subscriptions:
+                # 统计频率分布
+                freq = sub.push_frequency or 'daily'
+                frequency_counts[freq] = frequency_counts.get(freq, 0) + 1
+                
+                # 统计用户订阅数
+                user_email = sub.user.email
+                user_subscription_counts[user_email] = user_subscription_counts.get(user_email, 0) + 1
+            
+            app.logger.info(f"[调度器] 找到 {len(subscriptions)} 个活跃订阅 (涉及 {len(user_subscription_counts)} 个用户)")
+            app.logger.info(f"[调度器] 订阅频率分布: {frequency_counts}")
+            print(f"[调度器] 找到 {len(subscriptions)} 个活跃订阅，涉及 {len(user_subscription_counts)} 个用户")
             
             push_count = 0
-            for user in users:
+            successful_pushes = 0
+            failed_pushes = 0
+            
+            for subscription in subscriptions:
                 # 添加调试信息
-                app.logger.info(f"[调度器调试] 检查用户 {user.email}: 推送时间={user.push_time}, 频率={user.push_frequency}, 推送日={user.push_day}, 最后推送={user.last_push}")
+                app.logger.info(f"[调度器调试] 检查订阅 {subscription.id} (用户: {subscription.user.email}, 关键词: {subscription.keywords}): 推送时间={subscription.push_time}, 频率={subscription.push_frequency}, 推送日={subscription.push_day}")
                 
-                if should_push_now(user, hour, minute, weekday, day_of_month):
+                if should_push_subscription_now(subscription, hour, minute, weekday, day_of_month):
                     try:
-                        app.logger.info(f"[调度器] 开始为用户 {user.email} 推送文章 (推送时间: {user.push_time}, 频率: {user.push_frequency})")
-                        print(f"[调度器] 开始为用户 {user.email} 推送文章")
+                        app.logger.info(f"[调度器] 开始为订阅 {subscription.id} 推送文章 (用户: {subscription.user.email}, 推送时间: {subscription.push_time}, 频率: {subscription.push_frequency})")
+                        print(f"[调度器] 开始为订阅 {subscription.id} 推送文章 (用户: {subscription.user.email})")
                         
-                        result = push_service.process_user_subscriptions(user.id)
+                        # 按订阅推送单个订阅
+                        result = push_service.process_single_subscription(subscription.id)
                         push_count += 1
                         
-                        if result and result[0].get('success'):
-                            articles_count = result[0].get('articles_found', 0)
+                        if result and result.get('success'):
+                            articles_count = result.get('articles_found', 0)
+                            successful_pushes += 1
                             if articles_count > 0:
-                                log_activity('INFO', 'push', f'用户 {user.email} 推送成功: {articles_count} 篇文章')
-                                app.logger.info(f"[调度器] 用户 {user.email} 推送成功: {articles_count} 篇文章")
+                                log_activity('INFO', 'push', f'订阅推送成功: {subscription.keywords} -> {subscription.user.email}, 文章数: {articles_count}')
+                                app.logger.info(f"[调度器] 订阅 {subscription.id} 推送成功: {articles_count} 篇文章")
+                                print(f"[调度器] 订阅 {subscription.id} 推送成功: {articles_count} 篇文章")
                             else:
-                                log_activity('INFO', 'push', f'用户 {user.email} 无新文章推送')
-                                app.logger.info(f"[调度器] 用户 {user.email} 无新文章推送")
+                                log_activity('INFO', 'push', f'订阅无新文章: {subscription.keywords} -> {subscription.user.email}')
+                                app.logger.info(f"[调度器] 订阅 {subscription.id} 无新文章推送")
+                                
+                        else:
+                            failed_pushes += 1
+                            error_msg = result.get('error', '未知错误') if result else '推送服务返回空结果'
+                            log_activity('ERROR', 'push', f'订阅推送失败: {subscription.keywords} -> {subscription.user.email}, 错误: {error_msg}')
+                            app.logger.error(f"[调度器] 订阅 {subscription.id} 推送失败: {error_msg}")
+                            print(f"[调度器] 订阅 {subscription.id} 推送失败: {error_msg}")
+                            
                     except Exception as e:
-                        log_activity('ERROR', 'push', f'用户 {user.email} 推送失败: {str(e)}')
-                        app.logger.error(f"[调度器] 用户 {user.email} 推送失败: {e}")
-                        print(f"[调度器] 用户 {user.email} 推送失败: {e}")
+                        failed_pushes += 1
+                        log_activity('ERROR', 'push', f'订阅推送异常: {subscription.keywords} -> {subscription.user.email}, 错误: {str(e)}')
+                        app.logger.error(f"[调度器] 订阅 {subscription.id} 推送异常: {e}")
+                        print(f"[调度器] 订阅 {subscription.id} 推送异常: {e}")
                 else:
                     # 详细日志：记录为什么不推送
-                    if user.push_time:
-                        app.logger.debug(f"[调度器] 用户 {user.email} 时间不匹配 (设定: {user.push_time}, 当前: {hour:02d}:{minute:02d})")
+                    if subscription.push_time:
+                        app.logger.debug(f"[调度器] 订阅 {subscription.id} 时间不匹配 (设定: {subscription.push_time}, 当前: {hour:02d}:{minute:02d})")
             
             if push_count > 0:
-                app.logger.info(f"[调度器] 本次检查完成，推送了 {push_count} 个用户")
-                print(f"[调度器] 本次检查完成，推送了 {push_count} 个用户")
+                app.logger.info(f"[调度器] 本次检查完成，处理了 {push_count} 个订阅 (成功: {successful_pushes}, 失败: {failed_pushes})")
+                print(f"[调度器] 本次检查完成，处理了 {push_count} 个订阅 (成功: {successful_pushes}, 失败: {failed_pushes})")
+                log_activity('INFO', 'scheduler', f'调度器执行完成: 总订阅数={len(subscriptions)}, 触发推送={push_count}, 成功={successful_pushes}, 失败={failed_pushes}')
             else:
-                app.logger.debug(f"[调度器] 本次检查完成，无用户需要推送")
+                app.logger.debug(f"[调度器] 本次检查完成，无订阅需要推送")
+                log_activity('INFO', 'scheduler', f'调度器执行完成: 总订阅数={len(subscriptions)}, 无触发推送')
                         
         except Exception as e:
             log_activity('ERROR', 'push', f'推送检查任务失败: {str(e)}')
             app.logger.error(f"[调度器] 推送检查任务失败: {e}")
             print(f"[调度器] 推送检查任务失败: {e}")
+
+def should_push_subscription_now(subscription, current_hour, current_minute, current_weekday, current_day):
+    """判断订阅是否应该在当前时间推送"""
+    app.logger.info(f"[调度器调试] should_push_subscription_now: 订阅={subscription.id}, 用户={subscription.user.email}, 当前时间={current_hour}:{current_minute}, 当前星期={current_weekday}")
+    
+    # 检查推送时间
+    if subscription.push_time:
+        try:
+            push_hour, push_minute = map(int, subscription.push_time.split(':'))
+            # 允许1分钟误差
+            time_match = (current_hour == push_hour and abs(current_minute - push_minute) <= 1)
+            app.logger.info(f"[调度器调试] should_push_subscription_now: 订阅 {subscription.id} 设置时间 {push_hour}:{push_minute}, 时间匹配: {time_match}")
+            if not time_match:
+                return False
+        except:
+            app.logger.error(f"[调度器调试] should_push_subscription_now: 订阅 {subscription.id} 推送时间格式错误: {subscription.push_time}")
+            return False
+    else:
+        # 默认推送时间8:00
+        default_time_match = (current_hour == 8 and current_minute <= 1)
+        app.logger.info(f"[调度器调试] should_push_subscription_now: 订阅 {subscription.id} 使用默认时间8:00, 匹配: {default_time_match}")
+        if not default_time_match:
+            return False
+    
+    # 检查推送频率
+    if subscription.push_frequency == 'daily':
+        return should_push_subscription_daily(subscription)
+    elif subscription.push_frequency == 'weekly':
+        return should_push_subscription_weekly(subscription, current_weekday)
+    elif subscription.push_frequency == 'monthly':
+        return should_push_subscription_monthly(subscription, current_day)
+    
+    return False
+
+def should_push_subscription_daily(subscription):
+    """检查订阅是否应该每日推送"""
+    if not subscription.last_search:
+        app.logger.info(f"[调度器调试] should_push_subscription_daily: 订阅 {subscription.id} 从未搜索过，返回True")
+        return True
+    
+    # 检查距离上次搜索是否超过20小时（避免重复推送）
+    time_since_last = beijing_now() - subscription.last_search
+    should_push = time_since_last.total_seconds() > 20 * 3600
+    app.logger.info(f"[调度器调试] should_push_subscription_daily: 订阅 {subscription.id} 距离上次搜索 {time_since_last.total_seconds()/3600:.1f} 小时，应该推送: {should_push}")
+    return should_push
+
+def should_push_subscription_weekly(subscription, current_weekday):
+    """检查订阅是否应该每周推送"""
+    app.logger.info(f"[调度器调试] should_push_subscription_weekly: 订阅={subscription.id}, 当前星期={current_weekday}, 设置星期={subscription.push_day}, 最后搜索={subscription.last_search}")
+    
+    if not subscription.last_search:
+        app.logger.info(f"[调度器调试] should_push_subscription_weekly: 订阅 {subscription.id} 从未搜索过，返回True")
+        return True
+    
+    # 检查今天是否是设置的推送日
+    subscription_weekday = subscription.push_day or 'monday'
+    if current_weekday != subscription_weekday:
+        app.logger.info(f"[调度器调试] should_push_subscription_weekly: 订阅 {subscription.id} 今天不是推送日 ({current_weekday} != {subscription_weekday})，返回False")
+        return False
+    
+    # 检查距离上次搜索是否超过6天
+    time_since_last = beijing_now() - subscription.last_search
+    should_push = time_since_last.days >= 6
+    app.logger.info(f"[调度器调试] should_push_subscription_weekly: 订阅 {subscription.id} 距离上次搜索 {time_since_last.days} 天，应该推送: {should_push}")
+    return should_push
+
+def should_push_subscription_monthly(subscription, current_day):
+    """检查订阅是否应该每月推送"""
+    if not subscription.last_search:
+        return True
+    
+    # 检查今天是否是设置的推送日
+    subscription_day = subscription.push_month_day or 1
+    if current_day != subscription_day:
+        return False
+    
+    # 检查距离上次搜索是否超过25天
+    time_since_last = beijing_now() - subscription.last_search
+    return time_since_last.days >= 25
 
 def should_push_now(user, current_hour, current_minute, current_weekday, current_day):
     """判断用户是否应该在当前时间推送"""
@@ -7877,7 +8191,7 @@ def admin_push():
                         try:
                             # 自动重启调度器修复问题
                             app.logger.info("[调度器自检] 开始自动重启调度器")
-                            scheduler.shutdown(wait=False)
+                            shutdown_scheduler_safely()
                             init_scheduler()
                             
                             if scheduler.running:
@@ -9018,7 +9332,7 @@ def reset_scheduler():
         # 强制停止当前调度器
         if scheduler.running:
             try:
-                scheduler.shutdown(wait=False)
+                shutdown_scheduler_safely()
                 app.logger.info("[调度器重置] 已停止运行中的调度器")
             except Exception as e:
                 app.logger.warning(f"[调度器重置] 停止调度器失败: {e}")
@@ -9072,7 +9386,7 @@ def restart_scheduler():
         # 停止当前调度器
         if scheduler.running:
             try:
-                scheduler.shutdown(wait=False)
+                shutdown_scheduler_safely()
                 app.logger.info("[调度器重启] 已停止运行中的调度器")
             except Exception as e:
                 app.logger.warning(f"[调度器重启] 停止调度器失败: {e}")
@@ -10954,9 +11268,7 @@ if __name__ == '__main__':
         except KeyboardInterrupt:
             print("\\n服务器已停止")
         finally:
-            if scheduler.running:
-                scheduler.shutdown()
-                print("定时任务已停止")
+            shutdown_scheduler_safely()
 
 # 应用初始化函数（多worker环境）
 def initialize_app():
@@ -11085,7 +11397,19 @@ def update_scheduler_heartbeat():
     import time
     import json
     
-    if not scheduler.running:
+    # 检查调度器状态，防止在关闭过程中执行
+    try:
+        if not scheduler.running:
+            return
+            
+        # 检查执行器是否已关闭
+        if hasattr(scheduler._executors, '_executors'):
+            for executor in scheduler._executors.values():
+                if hasattr(executor, '_pool') and executor._pool._shutdown:
+                    return  # 执行器已关闭，避免提交新任务
+        
+    except (AttributeError, RuntimeError):
+        # 调度器正在关闭或已关闭
         return
         
     lock_file_path = '/app/data/scheduler.lock'
@@ -11158,7 +11482,7 @@ def scheduler_health_check():
             
             # 自动重启调度器
             app.logger.info("[调度器健康检查] 执行自动修复")
-            scheduler.shutdown(wait=False)
+            shutdown_scheduler_safely()
             
             # 稍等片刻再重启
             time.sleep(1)

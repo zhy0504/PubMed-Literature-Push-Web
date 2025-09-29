@@ -120,8 +120,7 @@ class JournalDataCache:
             self.last_loaded = datetime.now()
             self.load_timestamp = time.time()
             
-            worker_id = os.getpid()
-            print(f"[Worker {worker_id}] 期刊数据缓存加载完成: JCR({len(self.jcr_data)}条) + 中科院({len(self.zky_data)}条), 耗时 {load_time:.2f}秒")
+            print(f"期刊数据缓存加载完成: JCR({len(self.jcr_data)}条) + 中科院({len(self.zky_data)}条), 耗时 {load_time:.2f}秒")
             
         except Exception as e:
             print(f"加载期刊数据失败: {str(e)}")
@@ -400,9 +399,7 @@ if log_file:
         
         # 添加到 app.logger
         app.logger.addHandler(file_handler)
-        import os
-        worker_id = os.getpid()
-        app.logger.info(f"[Worker {worker_id}] 应用启动，日志级别: {log_level_name}, 日志文件: {log_file}")
+        app.logger.info(f"应用启动，日志级别: {log_level_name}, 日志文件: {log_file}")
     except PermissionError:
         # 如果无法写入日志文件，只使用控制台输出
         print(f"[警告] 无权限写入日志文件: {log_file}，仅使用控制台输出")
@@ -1686,63 +1683,19 @@ push_service = SimpleLiteraturePushService()
 scheduler = BackgroundScheduler(timezone=APP_TIMEZONE)
 
 def init_scheduler():
-    """初始化定时推送调度器"""
-    import os
-    import socket
-    import time
-    import json
-    
-    # 在gunicorn环境下，只有主进程才应该运行调度器
-    # 使用文件锁确保只有一个进程运行调度器
-    lock_file = '/app/data/scheduler.lock'
-    
+    """初始化定时推送调度器（单worker简化版）"""
+    # 单worker环境下，直接初始化调度器，无需复杂的锁机制
     try:
-        # 尝试创建锁文件
-        if os.path.exists(lock_file):
-            # 检查锁文件中的进程是否还在运行
-            try:
-                with open(lock_file, 'r') as f:
-                    lock_data = json.loads(f.read().strip())
-                old_pid = lock_data.get('pid')
-                start_time = lock_data.get('start_time', 0)
-                last_heartbeat = lock_data.get('last_heartbeat', 0)
-                
-                # 检查进程是否存在
-                os.kill(old_pid, 0)
-                
-                # 检查心跳时间（如果超过5分钟没有心跳，认为进程已死）
-                current_time = time.time()
-                if current_time - last_heartbeat > 300:  # 5分钟
-                    print(f"调度器进程 {old_pid} 心跳超时，重新初始化")
-                    os.remove(lock_file)
-                else:
-                    print(f"调度器已在进程 {old_pid} 中运行，跳过初始化")
-                    return
-            except (OSError, ValueError, json.JSONDecodeError, KeyError):
-                # 进程不存在或文件损坏，删除锁文件
-                print("发现无效的调度器锁文件，正在清理...")
-                try:
-                    os.remove(lock_file)
-                except:
-                    pass
+        if scheduler.running:
+            print("调度器已运行，跳过重复初始化")
+            return
         
-        # 创建新的锁文件
-        current_time = time.time()
-        lock_data = {
-            'pid': os.getpid(),
-            'start_time': current_time,
-            'last_heartbeat': current_time,
-            'hostname': socket.gethostname()
-        }
+        print("初始化定时推送调度器...")
         
-        with open(lock_file, 'w') as f:
-            f.write(json.dumps(lock_data))
-        
-        print(f"进程 {os.getpid()} 开始初始化调度器")
+        # 获取推送检查频率设置
+        check_frequency = int(SystemSetting.get_setting('push_check_frequency', '1'))
         
         # 添加定时任务
-        # 根据配置的频率检查是否有用户需要推送
-        check_frequency = int(SystemSetting.get_setting('push_check_frequency', '1'))
         if check_frequency == 1:
             # 每小时检查（默认）
             trigger = CronTrigger(minute=0)  # 每小时的0分执行
@@ -1761,65 +1714,17 @@ def init_scheduler():
             max_instances=1
         )
         
-        # 添加心跳任务，每分钟更新一次锁文件
-        scheduler.add_job(
-            func=update_scheduler_heartbeat,
-            trigger=CronTrigger(minute='*'),  # 每分钟执行
-            id='scheduler_heartbeat',
-            name='调度器心跳',
-            replace_existing=True,
-            max_instances=1
-        )
-        
         # 启动调度器
         if not scheduler.running:
             scheduler.start()
-            print(f"定时推送调度器已启动 (PID: {os.getpid()})")
-        
-        # 注册关闭处理器
-        def cleanup_scheduler():
-            if scheduler.running:
-                scheduler.shutdown()
-            if os.path.exists(lock_file):
-                try:
-                    os.remove(lock_file)
-                    print("调度器锁文件已清理")
-                except:
-                    pass
-            # 清理初始化标记文件
-            if os.path.exists('/app/data/scheduler_init_done'):
-                try:
-                    os.remove('/app/data/scheduler_init_done')
-                    print("调度器初始化标记已清理")
-                except:
-                    pass
-        
-        atexit.register(cleanup_scheduler)
+            print(f"✅ 调度器启动成功: {job_name}")
         
     except Exception as e:
-        print(f"调度器初始化失败: {e}")
+        print(f"❌ 调度器初始化失败: {e}")
+        import traceback
+        traceback.print_exc()
 
-def update_scheduler_heartbeat():
-    """更新调度器心跳时间"""
-    import os
-    import json
-    import time
-    
-    lock_file = '/app/data/scheduler.lock'
-    try:
-        if os.path.exists(lock_file):
-            with open(lock_file, 'r') as f:
-                lock_data = json.loads(f.read().strip())
-            
-            # 更新心跳时间
-            lock_data['last_heartbeat'] = time.time()
-            
-            with open(lock_file, 'w') as f:
-                f.write(json.dumps(lock_data))
-            
-            app.logger.debug(f"调度器心跳更新: PID {os.getpid()}")
-    except Exception as e:
-        app.logger.error(f"更新调度器心跳失败: {e}")
+# 删除：单worker环境下不再需要心跳机制
 
 def check_and_push_articles():
     """检查并执行推送任务"""
@@ -2087,7 +1992,7 @@ class AIService:
         """获取文献简介提示词模板"""
         # 从数据库获取简介提示词模板
         template = AIPromptTemplate.query.filter_by(
-            prompt_type='brief_intro',
+            template_type='brief_intro',
             is_default=True
         ).first()
         
@@ -10375,19 +10280,20 @@ def update_subscription(subscription_id):
 
 if __name__ == '__main__':
     with app.app_context():
-        # 确保所有模型都正确定义
-        print("开始数据库初始化...")
-        
-        # 验证Article模型是否包含所有必需字段
-        article_columns = [column.name for column in Article.__table__.columns]
-        required_fields = ['abstract_cn', 'brief_intro', 'issn', 'eissn']
-        missing_fields = [field for field in required_fields if field not in article_columns]
-        
-        if missing_fields:
-            print(f"错误：Article模型缺少字段: {missing_fields}")
-            print("请检查模型定义...")
-        else:
-            print("✓ Article模型包含所有必需字段")
+        # 只在直接运行时执行初始化，gunicorn环境跳过
+        if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+            print("开始数据库初始化...")
+            
+            # 验证Article模型是否包含所有必需字段
+            article_columns = [column.name for column in Article.__table__.columns]
+            required_fields = ['abstract_cn', 'brief_intro', 'issn', 'eissn']
+            missing_fields = [field for field in required_fields if field not in article_columns]
+            
+            if missing_fields:
+                print(f"错误：Article模型缺少字段: {missing_fields}")
+                print("请检查模型定义...")
+            else:
+                print("✓ Article模型包含所有必需字段")
         
         # 删除现有数据库文件以确保完全重新创建
         import os
@@ -10655,7 +10561,7 @@ if __name__ == '__main__':
                 # AI功能设置
                 ('ai_query_builder_enabled', 'true', '启用AI检索式生成', 'ai'),
                 ('ai_translation_enabled', 'true', '启用AI摘要翻译', 'ai'),
-                ('ai_brief_intro_enabled', 'false', '启用AI文献简介', 'ai'),
+                ('ai_brief_intro_enabled', 'true', '启用AI文献简介', 'ai'),
                 ('ai_translation_batch_size', '20', '每批翻译数量', 'ai'),
                 ('ai_translation_batch_delay', '5', '批次间隔时间(秒)', 'ai'),
             ]
@@ -10799,3 +10705,35 @@ if __name__ == '__main__':
             if scheduler.running:
                 scheduler.shutdown()
                 print("定时任务已停止")
+
+# 简化的应用初始化函数（单worker环境）
+def initialize_app():
+    """应用初始化函数，单worker环境下简化逻辑"""
+    # 单worker环境下，直接进行必要的检查即可
+    with app.app_context():
+        print("🔄 应用初始化...")
+        
+        # 检查数据库是否存在
+        if not os.path.exists('pubmed_app.db'):
+            print("⚠️  数据库不存在，请先运行初始化")
+            return
+        
+        # 简单验证关键表结构
+        try:
+            from sqlalchemy import inspect
+            inspector = inspect(db.engine)
+            
+            if inspector.has_table('article'):
+                actual_columns = {col['name'] for col in inspector.get_columns('article')}
+                if 'abstract_cn' in actual_columns and 'brief_intro' in actual_columns:
+                    print("✅ 数据库结构验证通过")
+                else:
+                    print("⚠️  数据库表结构需要更新")
+        except Exception as e:
+            print(f"⚠️  初始化检查: {e}")
+
+# 单worker环境下直接执行初始化
+try:
+    initialize_app()
+except Exception as e:
+    print(f"⚠️ 应用初始化警告: {e}")

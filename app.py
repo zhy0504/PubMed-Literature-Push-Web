@@ -30,7 +30,8 @@ import atexit
 import signal
 # RQ相关导入
 from rq_config import RQConfig, get_queue_info, get_failed_jobs, redis_conn, scheduler as rq_scheduler
-from tasks import batch_schedule_all_subscriptions, immediate_push_subscription
+# 延迟导入 tasks 避免循环导入
+# from tasks import batch_schedule_all_subscriptions, immediate_push_subscription
 import os
 import csv
 import os
@@ -1896,6 +1897,7 @@ def init_scheduler():
         
         # 批量调度所有活跃订阅
         from rq_config import enqueue_job
+        from tasks import batch_schedule_all_subscriptions
         job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
         print(f"✅ 批量调度任务已排队: {job.id}")
         
@@ -9532,6 +9534,7 @@ def admin_rq_trigger_batch_schedule():
     """触发批量调度所有订阅"""
     try:
         from rq_config import enqueue_job
+        from tasks import batch_schedule_all_subscriptions
         job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
         
         log_activity('INFO', 'admin', f'RQ批量调度已触发: {job.id}', current_user.id, request.remote_addr)
@@ -9548,6 +9551,7 @@ def admin_rq_trigger_batch_schedule():
 def admin_rq_immediate_push(subscription_id):
     """立即推送指定订阅"""
     try:
+        from tasks import immediate_push_subscription
         job = immediate_push_subscription(subscription_id)
         
         log_activity('INFO', 'admin', f'立即推送订阅 {subscription_id}: {job.id}', current_user.id, request.remote_addr)

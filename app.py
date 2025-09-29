@@ -3603,7 +3603,7 @@ class PubMedRateLimiter:
     
     def execute_request(self, request_func):
         """
-        执行限流的请求
+        执行限流的请求 - 简化版本，直接在主线程执行避免死锁
         
         Args:
             request_func: 要执行的请求函数
@@ -3611,21 +3611,28 @@ class PubMedRateLimiter:
         Returns:
             请求结果
         """
-        import concurrent.futures
-        
-        # 在主线程中检查并更新API Key状态
-        current_time = time.time()
-        if current_time - self._last_check_time > self._check_interval:
-            self._update_api_key_status()
-        
-        # 创建Future对象用于获取结果
-        future = concurrent.futures.Future()
-        
-        # 将请求任务加入队列
-        self._request_queue.put((request_func, future))
-        
-        # 等待结果
-        return future.result()
+        # 简化版本：直接在主线程执行，避免复杂的线程间通信导致的卡死
+        try:
+            # 执行限流控制
+            current_time = time.time()
+            
+            # 简单的限流逻辑：0.5秒间隔
+            time_since_last = current_time - self._last_request_time
+            min_interval = 0.5  # 固定0.5秒间隔，足够保守
+            
+            if time_since_last < min_interval:
+                sleep_time = min_interval - time_since_last
+                time.sleep(sleep_time)
+            
+            # 记录请求时间
+            self._last_request_time = time.time()
+            
+            # 直接执行请求
+            return request_func()
+            
+        except Exception as e:
+            app.logger.error(f"PubMed API请求失败: {str(e)}")
+            raise
     
     def shutdown(self):
         """关闭限流器"""

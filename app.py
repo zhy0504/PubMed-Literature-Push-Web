@@ -9866,7 +9866,7 @@ def admin_ai_prompt_save():
             flash('提示词类型和内容不能为空', 'error')
             return redirect(url_for('admin_ai_prompts'))
         
-        if template_type not in ['query_builder', 'translator']:
+        if template_type not in ['query_builder', 'translator', 'brief_intro']:
             flash('无效的提示词类型', 'error')
             return redirect(url_for('admin_ai_prompts'))
         

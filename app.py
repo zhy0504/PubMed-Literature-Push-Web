@@ -7798,16 +7798,46 @@ def change_password():
 @admin_required
 def admin_push():
     """推送管理页面 - 简化单worker版本"""
-    # 简化的调度器状态 - 只保留核心信息
+    # 跨进程调度器状态检查 - 通过锁文件判断
+    def check_scheduler_running():
+        """跨进程检查调度器是否真正运行"""
+        import time
+        import json
+        
+        # 首先检查本进程调度器状态
+        if scheduler.running:
+            return True
+            
+        # 检查锁文件状态
+        lock_file_path = '/app/data/scheduler.lock'
+        if not os.path.exists(lock_file_path):
+            return False
+            
+        try:
+            with open(lock_file_path, 'r') as f:
+                lock_data = json.loads(f.read())
+            
+            last_heartbeat = lock_data.get('last_heartbeat', 0)
+            current_time = time.time()
+            heartbeat_age = current_time - last_heartbeat
+            
+            # 如果心跳在2分钟内，认为调度器运行中
+            return heartbeat_age <= 120
+        except:
+            return False
+    
+    # 使用跨进程状态检查
+    scheduler_running = check_scheduler_running()
+    
     scheduler_status = {
-        'running': scheduler.running,
+        'running': scheduler_running,
         'jobs': len(scheduler.get_jobs()) if scheduler.running else 0,
         'timezone': SYSTEM_TIMEZONE,
         'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')
     }
     
     # 获取下次执行时间
-    if scheduler.running:
+    if scheduler_running and scheduler.running:
         jobs = scheduler.get_jobs()
         if jobs:
             next_run_time = jobs[0].next_run_time
@@ -8660,6 +8690,32 @@ def reload_journal_cache():
 def scheduler_status():
     """查看调度器状态"""
     try:
+        # 跨进程调度器状态检查
+        def check_scheduler_running():
+            import time
+            import json
+            
+            if scheduler.running:
+                return True
+                
+            lock_file_path = '/app/data/scheduler.lock'
+            if not os.path.exists(lock_file_path):
+                return False
+                
+            try:
+                with open(lock_file_path, 'r') as f:
+                    lock_data = json.loads(f.read())
+                
+                last_heartbeat = lock_data.get('last_heartbeat', 0)
+                current_time = time.time()
+                heartbeat_age = current_time - last_heartbeat
+                
+                return heartbeat_age <= 120
+            except:
+                return False
+        
+        scheduler_running = check_scheduler_running()
+        
         jobs = []
         if scheduler.running:
             for job in scheduler.get_jobs():
@@ -8671,7 +8727,7 @@ def scheduler_status():
                 })
         
         status = {
-            'running': scheduler.running,
+            'running': scheduler_running,
             'jobs': jobs
         }
         
@@ -10796,7 +10852,7 @@ def recover_scheduler_in_multiworker():
             current_time = time.time()
             heartbeat_age = current_time - last_heartbeat
             
-            if heartbeat_age > 300:  # 5分钟没有心跳，认为进程已死
+            if heartbeat_age > 90:  # 1.5分钟没有心跳，认为进程已死
                 print(f"[Worker {current_pid}] 检测到僵死锁文件，PID:{locked_pid}，心跳超时:{heartbeat_age:.0f}秒")
                 os.remove(lock_file_path)
                 print(f"[Worker {current_pid}] 已清理僵死锁文件")

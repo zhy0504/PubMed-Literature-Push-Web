@@ -156,15 +156,37 @@ journal_cache = JournalDataCache()
 import re
 
 # 东八区时区（北京时间）
-BEIJING_TZ = pytz.timezone('Asia/Shanghai')
+# 时区配置 - 支持环境变量配置
+DEFAULT_TIMEZONE = 'Asia/Shanghai'  # 默认时区
+# 优先使用标准的 TZ 环境变量，如果没有则使用默认值
+SYSTEM_TIMEZONE = os.environ.get('TZ', DEFAULT_TIMEZONE)
 
+try:
+    import pytz
+    APP_TIMEZONE = pytz.timezone(SYSTEM_TIMEZONE)
+    print(f"使用时区: {SYSTEM_TIMEZONE}")
+except Exception as e:
+    print(f"时区配置错误 '{SYSTEM_TIMEZONE}': {e}")
+    print(f"回退到默认时区: {DEFAULT_TIMEZONE}")
+    APP_TIMEZONE = pytz.timezone(DEFAULT_TIMEZONE)
+    SYSTEM_TIMEZONE = DEFAULT_TIMEZONE
+
+def get_current_time():
+    """获取当前系统时间（使用配置的时区）"""
+    return datetime.now(APP_TIMEZONE)
+
+def get_current_utc_time():
+    """获取当前UTC时间，转换为系统时区"""
+    return datetime.now(APP_TIMEZONE)
+
+# 为了向后兼容，保留原有函数名但使用新的时区配置
 def beijing_now():
-    """获取北京时间"""
-    return datetime.now(BEIJING_TZ)
+    """获取当前时间（使用配置的时区，兼容原函数名）"""
+    return datetime.now(APP_TIMEZONE)
 
 def beijing_utcnow():
-    """获取北京时间（兼容utcnow格式）"""
-    return datetime.now(BEIJING_TZ)
+    """获取当前时间（使用配置的时区，兼容原函数名）"""
+    return datetime.now(APP_TIMEZONE)
 
 def check_and_process_journal_data():
     """检查并处理期刊数据文件"""
@@ -1576,7 +1598,8 @@ class SimpleLiteraturePushService:
 push_service = SimpleLiteraturePushService()
 
 # 初始化调度器
-scheduler = BackgroundScheduler(timezone=BEIJING_TZ)
+# 初始化调度器（使用配置的时区）
+scheduler = BackgroundScheduler(timezone=APP_TIMEZONE)
 
 def init_scheduler():
     """初始化定时推送调度器"""
@@ -3643,7 +3666,7 @@ class PubMedAPI:
                             except ValueError:
                                 day = 1
                         
-                        return datetime(year, month, day, tzinfo=BEIJING_TZ)
+                        return datetime(year, month, day, tzinfo=APP_TIMEZONE)
                     except ValueError:
                         pass
             
@@ -3653,7 +3676,7 @@ class PubMedAPI:
                 year_elem = date_completed.find('Year')
                 if year_elem is not None and year_elem.text:
                     try:
-                        return datetime(int(year_elem.text), 1, 1, tzinfo=BEIJING_TZ)
+                        return datetime(int(year_elem.text), 1, 1, tzinfo=APP_TIMEZONE)
                     except ValueError:
                         pass
             
@@ -7258,7 +7281,9 @@ def admin_push():
         'running': scheduler.running,
         'jobs': len(scheduler.get_jobs()) if scheduler.running else 0,
         'lock_file_exists': os.path.exists('/app/data/scheduler.lock'),
-        'current_pid': os.getpid()
+        'current_pid': os.getpid(),
+        'timezone': SYSTEM_TIMEZONE,  # 添加时区信息
+        'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')  # 添加当前时间
     }
     
     # 如果锁文件存在，读取PID
@@ -7445,6 +7470,18 @@ def admin_push():
                                         {% else %}
                                             <span class="text-warning"><i class="fas fa-unlock"></i> 不存在</span>
                                         {% endif %}
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>系统时区:</strong></td>
+                                    <td>
+                                        <span class="text-info">{{ scheduler_status['timezone'] }}</span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>当前时间:</strong></td>
+                                    <td>
+                                        <span class="text-success">{{ scheduler_status['current_time'] }}</span>
                                     </td>
                                 </tr>
                             </table>

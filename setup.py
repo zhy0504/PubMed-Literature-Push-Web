@@ -143,6 +143,8 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 keywords TEXT,
                 issn VARCHAR(20),
                 eissn VARCHAR(20),
+                abstract_cn TEXT,
+                brief_intro TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -377,7 +379,18 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
 6. 只返回中文翻译结果，不要任何额外说明或格式
 
 英文摘要：
-{abstract}""", True)
+{abstract}""", True),
+            
+            # 简介生成提示词
+            ('brief_intro', """请为以下医学文献生成一句话简介，要求：
+1. 突出文献的核心发现或主要贡献
+2. 使用简洁明了的中文表达
+3. 控制在30-50字以内
+4. 只返回简介内容，不要其他文字
+
+标题: {title}
+摘要: {abstract}
+简介:""", True)
         ]
         
         for template_type, prompt_content, is_default in default_prompts:
@@ -390,6 +403,67 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
         
         # 提交更改
         conn.commit()
+        
+        # ===== 详细验证创建结果 =====
+        print("\n" + "="*60)
+        print("📊 数据库表结构验证报告")
+        print("="*60)
+        
+        # 检查所有表
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+        print(f"🗂️  已创建的表 ({len(tables)}): {', '.join(tables)}")
+        
+        # 重点检查Article表结构
+        if 'article' in tables:
+            print(f"\n📋 Article表详细结构:")
+            cursor.execute("PRAGMA table_info(article)")
+            columns = cursor.fetchall()
+            print(f"   总字段数: {len(columns)}")
+            print(f"   字段详情:")
+            
+            for col in columns:
+                col_id, name, col_type, not_null, default_value, pk = col
+                nullable = "NOT NULL" if not_null else "NULL"
+                default_info = f", DEFAULT: {default_value}" if default_value else ""
+                pk_info = " (PRIMARY KEY)" if pk else ""
+                print(f"     {col_id+1:2d}. {name:15s} | {col_type:15s} | {nullable}{default_info}{pk_info}")
+            
+            # 验证关键AI字段
+            actual_columns = {col[1] for col in columns}
+            ai_fields = {
+                'abstract_cn': '中文翻译字段',
+                'brief_intro': 'AI简介字段', 
+                'issn': 'ISSN字段',
+                'eissn': '电子ISSN字段'
+            }
+            
+            print(f"\n🔍 关键AI字段验证:")
+            all_present = True
+            for field, desc in ai_fields.items():
+                if field in actual_columns:
+                    print(f"     ✅ {field:15s} : 存在 ({desc})")
+                else:
+                    print(f"     ❌ {field:15s} : 缺失 ({desc})")
+                    all_present = False
+                    
+            if all_present:
+                print(f"\n🎉 Article表结构完整！所有AI功能字段都存在")
+            else:
+                print(f"\n⚠️  Article表存在缺失字段，可能影响AI功能")
+        else:
+            print("❌ Article表未创建！")
+        
+        # 检查AI提示词模板
+        cursor.execute("SELECT template_type, is_default FROM ai_prompt_template WHERE is_default=1")
+        prompts = cursor.fetchall()
+        print(f"\n📝 默认AI提示词模板:")
+        for template_type, is_default in prompts:
+            print(f"     ✅ {template_type}")
+        
+        print("\n" + "="*60)
+        print("📊 验证报告完成")
+        print("="*60)
         
         # 验证创建结果
         print("验证账号创建...")

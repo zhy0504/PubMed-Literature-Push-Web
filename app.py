@@ -1714,10 +1714,22 @@ def init_scheduler():
             max_instances=1
         )
         
+        # 添加调度器心跳监控任务（多worker环境下确保调度器持续运行）
+        scheduler.add_job(
+            id='scheduler_heartbeat',
+            func=update_scheduler_heartbeat,
+            trigger=CronTrigger(minute='*'),  # 每分钟更新心跳
+            name='调度器心跳更新',
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True
+        )
+        
         # 启动调度器
         if not scheduler.running:
             scheduler.start()
             print(f"✅ 调度器启动成功: {job_name}")
+            print("✅ 调度器心跳监控已启动")
         
     except Exception as e:
         print(f"❌ 调度器初始化失败: {e}")
@@ -10716,10 +10728,10 @@ if __name__ == '__main__':
                 scheduler.shutdown()
                 print("定时任务已停止")
 
-# 简化的应用初始化函数（单worker环境）
+# 应用初始化函数（多worker环境）
 def initialize_app():
-    """应用初始化函数，单worker环境下简化逻辑"""
-    # 单worker环境下，直接进行必要的检查即可
+    """应用初始化函数，多worker环境下含调度器恢复机制"""
+    # 多worker环境下，进行基本的数据库检查和调度器恢复
     with app.app_context():
         print("🔄 应用初始化...")
         
@@ -10750,21 +10762,119 @@ def initialize_app():
         
         print(f"✅ 数据库文件存在: {db_path}")
         
-        # 简单验证关键表结构
+        # 多worker环境下的调度器恢复机制
         try:
-            from sqlalchemy import inspect
-            inspector = inspect(db.engine)
-            
-            if inspector.has_table('article'):
-                actual_columns = {col['name'] for col in inspector.get_columns('article')}
-                if 'abstract_cn' in actual_columns and 'brief_intro' in actual_columns:
-                    print("✅ 数据库结构验证通过")
-                else:
-                    print("⚠️  数据库表结构需要更新")
+            recover_scheduler_in_multiworker()
         except Exception as e:
-            print(f"⚠️  初始化检查: {e}")
+            print(f"⚠️ 调度器恢复检查失败: {e}")
 
-# 单worker环境下直接执行初始化
+def recover_scheduler_in_multiworker():
+    """多worker环境下的调度器恢复机制"""
+    import time
+    
+    current_pid = os.getpid()
+    lock_file_path = '/app/data/scheduler.lock'
+    
+    print(f"[Worker {current_pid}] 检查调度器状态...")
+    
+    # 检查当前调度器是否运行
+    if scheduler.running:
+        print(f"[Worker {current_pid}] 调度器已在本进程中运行")
+        return
+    
+    # 检查锁文件
+    if os.path.exists(lock_file_path):
+        try:
+            with open(lock_file_path, 'r') as f:
+                content = f.read().strip()
+                import json
+                lock_data = json.loads(content)
+                locked_pid = lock_data.get('pid')
+                last_heartbeat = lock_data.get('last_heartbeat', 0)
+                
+            # 检查锁定进程是否还活着
+            current_time = time.time()
+            heartbeat_age = current_time - last_heartbeat
+            
+            if heartbeat_age > 300:  # 5分钟没有心跳，认为进程已死
+                print(f"[Worker {current_pid}] 检测到僵死锁文件，PID:{locked_pid}，心跳超时:{heartbeat_age:.0f}秒")
+                os.remove(lock_file_path)
+                print(f"[Worker {current_pid}] 已清理僵死锁文件")
+            else:
+                print(f"[Worker {current_pid}] 调度器运行在PID:{locked_pid}，心跳正常")
+                return
+                
+        except (json.JSONDecodeError, KeyError, FileNotFoundError):
+            print(f"[Worker {current_pid}] 锁文件格式异常，清理中...")
+            try:
+                os.remove(lock_file_path)
+            except:
+                pass
+    
+    # 尝试启动调度器
+    try:
+        print(f"[Worker {current_pid}] 尝试启动调度器...")
+        init_scheduler()
+        if scheduler.running:
+            print(f"[Worker {current_pid}] ✅ 调度器启动成功")
+            # 创建新的锁文件
+            create_scheduler_lock(current_pid)
+        else:
+            print(f"[Worker {current_pid}] ❌ 调度器启动失败")
+    except Exception as e:
+        print(f"[Worker {current_pid}] 调度器启动异常: {e}")
+
+def create_scheduler_lock(pid):
+    """创建调度器锁文件"""
+    import json
+    import time
+    import socket
+    
+    lock_file_path = '/app/data/scheduler.lock'
+    
+    # 确保目录存在
+    os.makedirs('/app/data', exist_ok=True)
+    
+    lock_data = {
+        'pid': pid,
+        'start_time': time.time(),
+        'last_heartbeat': time.time(),
+        'hostname': socket.gethostname()
+    }
+    
+    try:
+        with open(lock_file_path, 'w') as f:
+            json.dump(lock_data, f)
+        print(f"[Worker {pid}] 已创建调度器锁文件")
+    except Exception as e:
+        print(f"[Worker {pid}] 创建锁文件失败: {e}")
+
+# 添加定期心跳更新
+def update_scheduler_heartbeat():
+    """更新调度器心跳"""
+    import time
+    import json
+    
+    if not scheduler.running:
+        return
+        
+    lock_file_path = '/app/data/scheduler.lock'
+    current_pid = os.getpid()
+    
+    try:
+        if os.path.exists(lock_file_path):
+            with open(lock_file_path, 'r') as f:
+                lock_data = json.loads(f.read())
+            
+            # 只有锁文件的PID是当前进程才更新心跳
+            if lock_data.get('pid') == current_pid:
+                lock_data['last_heartbeat'] = time.time()
+                with open(lock_file_path, 'w') as f:
+                    json.dump(lock_data, f)
+    except:
+        pass  # 心跳更新失败不影响主要功能
+
+# 应用初始化执行
 try:
     initialize_app()
 except Exception as e:

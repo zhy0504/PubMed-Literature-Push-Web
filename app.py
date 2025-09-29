@@ -619,7 +619,7 @@ class Article(db.Model):
     # AI增强字段
     abstract_cn = db.Column(db.Text)  # 中文翻译
     brief_intro = db.Column(db.Text)  # AI生成的简介（一句话总结）
-    created_at = db.Column(db.DateTime, default=beijing_utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 # 用户文章关联模型
 class UserArticle(db.Model):

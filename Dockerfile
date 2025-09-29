@@ -51,5 +51,5 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
 # 设置入口点
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# 启动命令 - 单worker配置，适合个人使用的文献推送系统
-CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "1", "--timeout", "300", "--graceful-timeout", "300", "--preload", "app:app"]
+# 启动命令 - 4worker配置，提升并发处理能力
+CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "4", "--timeout", "600", "--graceful-timeout", "300", "--preload", "app:app"]

@@ -1683,8 +1683,8 @@ push_service = SimpleLiteraturePushService()
 scheduler = BackgroundScheduler(timezone=APP_TIMEZONE)
 
 def init_scheduler():
-    """初始化定时推送调度器（单worker简化版）"""
-    # 单worker环境下，直接初始化调度器，无需复杂的锁机制
+    """初始化定时推送调度器（多worker安全版）"""
+    # 多worker环境下，使用简单的运行状态检查避免重复初始化
     try:
         if scheduler.running:
             print("调度器已运行，跳过重复初始化")

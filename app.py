@@ -1966,9 +1966,8 @@ def fallback_to_apscheduler():
             trigger = CronTrigger(minute='*/30')  # 每30分钟执行  
             job_name = '每30分钟推送检查'
         elif check_frequency == 1:
-            # 每小时检查改为每15分钟检查，确保不错过任何推送时间
-            trigger = CronTrigger(minute='*/15')  # 每15分钟执行
-            job_name = '每15分钟推送检查'
+            trigger = CronTrigger(minute=0)  # 每小时的0分执行
+            job_name = '每小时推送检查'
         else:
             trigger = CronTrigger(minute=0, hour=f'*/{int(check_frequency)}')
             job_name = f'每{int(check_frequency)}小时推送检查'
@@ -9184,11 +9183,12 @@ def admin_system():
                                         <option value="24" {% if settings.push_check_frequency == '24' %}selected{% endif %}>每24小时检查一次</option>
                                     </select>
                                     <div class="form-text">
-                                        推送时间精度取决于检查频率：<br>
-                                        • <strong>15分钟检查</strong>：可确保不错过任何推送时间（推荐）<br>
+                                        推送时间精度说明：<br>
+                                        • <strong>15分钟检查</strong>：可确保不错过任何推送时间（最精确）<br>
                                         • <strong>30分钟检查</strong>：可覆盖大部分推送时间<br>  
-                                        • <strong>1小时检查</strong>：已优化为每15分钟检查，不会错过推送时间<br>
-                                        • <strong>2小时及以上</strong>：只能推送整点时间，会错过非整点时间
+                                        • <strong>1小时检查</strong>：每小时整点检查，配合智能补推机制确保不错过<br>
+                                        • <strong>2小时及以上</strong>：按设置间隔检查，配合智能补推机制<br>
+                                        <small class="text-muted">💡 智能补推：即使错过推送时间，系统会在1小时内自动补推</small>
                                     </div>
                                 </div>
                                 <div class="mb-3">

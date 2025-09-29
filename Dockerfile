@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     curl \
     sqlite3 \
+    redis-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
@@ -34,7 +35,8 @@ COPY . .
 RUN mkdir -p /app/data && \
     mkdir -p /app/logs && \
     chmod +x /app/start.sh && \
-    chmod +x /app/docker-entrypoint.sh
+    chmod +x /app/docker-entrypoint.sh && \
+    chmod +x /app/rq_worker.py
 
 # 创建非root用户
 RUN adduser --disabled-password --gecos '' appuser && \

@@ -8,6 +8,9 @@ WTForms==3.0.1
 requests==2.32.5
 python-dotenv==1.1.1
 APScheduler==3.10.4
+rq==1.15.1
+redis==5.0.1
+rq-dashboard==0.6.1
 Werkzeug==2.3.7
 email-validator==2.0.0
 gunicorn==21.2.0

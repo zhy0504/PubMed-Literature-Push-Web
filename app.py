@@ -28,6 +28,9 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import atexit
 import signal
+# RQ相关导入
+from rq_config import RQConfig, get_queue_info, get_failed_jobs, redis_conn, scheduler as rq_scheduler
+from tasks import batch_schedule_all_subscriptions, immediate_push_subscription
 import os
 import csv
 import os
@@ -362,6 +365,9 @@ def toggle_user_status(user_id):
 # 创建应用（禁用 instance 文件夹）
 app = Flask(__name__)
 app.config.from_object(Config)
+
+# 初始化RQ配置
+RQConfig.init_app(app)
 
 # 配置日志
 import logging
@@ -1874,25 +1880,87 @@ signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
 def init_scheduler():
-    """初始化定时推送调度器（多worker安全版）"""
-    # 多worker环境下，使用简单的运行状态检查避免重复初始化
+    """初始化RQ调度器（替代APScheduler）"""
+    try:
+        print("初始化RQ推送调度器...")
+        
+        # 检查Redis连接
+        redis_conn.ping()
+        print("✅ Redis连接正常")
+        
+        # 启动RQ调度器
+        if not rq_scheduler.connection:
+            rq_scheduler.connection = redis_conn
+            
+        print("✅ RQ调度器初始化完成")
+        
+        # 批量调度所有活跃订阅
+        from rq_config import enqueue_job
+        job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
+        print(f"✅ 批量调度任务已排队: {job.id}")
+        
+        # 可选：保留APScheduler作为备用调度器（仅用于RQ监控）
+        if not scheduler.running:
+            # 添加RQ调度器监控任务
+            scheduler.add_job(
+                func=monitor_rq_scheduler,
+                trigger=CronTrigger(minute='*/10'),  # 每10分钟检查一次
+                id='rq_monitor',
+                name='RQ调度器监控',
+                replace_existing=True,
+                max_instances=1
+            )
+            scheduler.start()
+            print("✅ APScheduler监控任务已启动")
+            
+    except Exception as e:
+        print(f"❌ RQ调度器初始化失败: {e}")
+        # 降级到原APScheduler
+        fallback_to_apscheduler()
+
+def monitor_rq_scheduler():
+    """监控RQ调度器状态"""
+    try:
+        # 检查Redis连接
+        redis_conn.ping()
+        
+        # 检查RQ队列状态
+        queue_info = get_queue_info()
+        
+        # 记录队列状态
+        log_activity('INFO', 'rq_monitor', 
+            f'RQ队列状态 - 高优先级:{queue_info["high"]["length"]}, '
+            f'默认:{queue_info["default"]["length"]}, '
+            f'低优先级:{queue_info["low"]["length"]}, '
+            f'定时任务:{queue_info["scheduled"]}')
+            
+        # 检查失败任务数量
+        failed_jobs = get_failed_jobs()
+        if len(failed_jobs) > 0:
+            log_activity('WARNING', 'rq_monitor', f'发现 {len(failed_jobs)} 个失败任务')
+            
+    except Exception as e:
+        log_activity('ERROR', 'rq_monitor', f'RQ监控异常: {e}')
+        print(f"[RQ监控] 异常: {e}")
+
+def fallback_to_apscheduler():
+    """降级到原APScheduler调度"""
+    print("⚠️ 降级到APScheduler调度...")
     try:
         if scheduler.running:
-            print("调度器已运行，跳过重复初始化")
+            print("APScheduler已运行，跳过重复初始化")
             return
         
-        print("初始化定时推送调度器...")
+        print("初始化APScheduler定时推送调度器...")
         
         # 获取推送检查频率设置
         check_frequency = int(SystemSetting.get_setting('push_check_frequency', '1'))
         
         # 添加定时任务
         if check_frequency == 1:
-            # 每小时检查（默认）
             trigger = CronTrigger(minute=0)  # 每小时的0分执行
             job_name = '每小时推送检查'
         else:
-            # 每N小时检查
             trigger = CronTrigger(minute=0, hour=f'*/{check_frequency}')
             job_name = f'每{check_frequency}小时推送检查'
         
@@ -1919,14 +1987,14 @@ def init_scheduler():
         # 启动调度器
         if not scheduler.running:
             scheduler.start()
-            print(f"✅ 调度器启动成功: {job_name}")
+            print(f"✅ APScheduler启动成功: {job_name}")
             print("✅ 调度器心跳监控已启动")
         
     except Exception as e:
-        print(f"❌ 调度器初始化失败: {e}")
+        print(f"❌ APScheduler降级失败: {e}")
         import traceback
         traceback.print_exc()
-
+        
 # 删除：单worker环境下不再需要心跳机制
 
 def check_and_push_articles():
@@ -8131,8 +8199,34 @@ def change_password():
 @app.route('/admin/push')
 @admin_required
 def admin_push():
-    """推送管理页面 - 简化单worker版本"""
-    # 跨进程调度器状态检查 - 通过锁文件判断
+    """推送管理页面 - RQ版本"""
+    # 检查RQ调度器状态
+    def check_rq_scheduler_status():
+        """检查RQ调度器状态"""
+        try:
+            # 检查Redis连接
+            redis_conn.ping()
+            
+            # 获取队列信息
+            queue_info = get_queue_info()
+            
+            # 获取失败任务
+            failed_jobs = get_failed_jobs()
+            
+            return {
+                "redis_connected": True,
+                "queue_info": queue_info,
+                "failed_jobs_count": len(failed_jobs),
+                "status": "running"
+            }
+        except Exception as e:
+            return {
+                "redis_connected": False,
+                "error": str(e),
+                "status": "error"
+            }
+    
+    # 检查传统调度器状态（降级模式）
     def check_scheduler_running():
         """跨进程检查调度器是否真正运行"""
         import time
@@ -8160,19 +8254,38 @@ def admin_push():
         except:
             return False
     
-    # 使用跨进程状态检查
+    # 获取RQ调度器状态
+    rq_status = check_rq_scheduler_status()
+    
+    # 使用跨进程状态检查（降级模式）
     scheduler_running = check_scheduler_running()
     
-    scheduler_status = {
-        'running': scheduler_running,
-        'jobs': len(scheduler.get_jobs()) if scheduler_running and scheduler.running else 0,
-        'timezone': SYSTEM_TIMEZONE,
-        'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')
-    }
-    
-    # 获取下次执行时间并自动检测异常
-    if scheduler_running:
-        if scheduler.running:
+    # 构建状态信息
+    if rq_status["status"] == "running":
+        # RQ调度器运行中
+        scheduler_status = {
+            'mode': 'rq',
+            'running': True,
+            'redis_connected': rq_status['redis_connected'],
+            'queue_info': rq_status['queue_info'],
+            'failed_jobs_count': rq_status['failed_jobs_count'],
+            'timezone': SYSTEM_TIMEZONE,
+            'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z'),
+            'next_run': f'动态调度中 ({rq_status["queue_info"]["scheduled"]} 个待执行任务)'
+        }
+    else:
+        # 降级到APScheduler模式
+        scheduler_status = {
+            'mode': 'apscheduler',
+            'running': scheduler_running,
+            'jobs': len(scheduler.get_jobs()) if scheduler_running and scheduler.running else 0,
+            'timezone': SYSTEM_TIMEZONE,
+            'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z'),
+            'rq_error': rq_status.get('error', 'Unknown')
+        }
+        
+        # 获取下次执行时间（降级模式）
+        if scheduler_running and scheduler.running:
             # 本进程调度器运行中，可以获取详细信息
             jobs = scheduler.get_jobs()
             if jobs:
@@ -9409,6 +9522,97 @@ def restart_scheduler():
     except Exception as e:
         log_activity('ERROR', 'admin', f'重启调度器失败: {str(e)}', current_user.id, request.remote_addr)
         flash(f'重启调度器失败: {str(e)}', 'admin')
+    
+    return redirect(url_for('admin_push'))
+
+# RQ管理路由
+@app.route('/admin/rq/trigger-batch-schedule', methods=['POST'])
+@admin_required
+def admin_rq_trigger_batch_schedule():
+    """触发批量调度所有订阅"""
+    try:
+        from rq_config import enqueue_job
+        job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
+        
+        log_activity('INFO', 'admin', f'RQ批量调度已触发: {job.id}', current_user.id, request.remote_addr)
+        flash(f'RQ批量调度任务已排队: {job.id}', 'admin')
+        
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'RQ批量调度失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'RQ批量调度失败: {str(e)}', 'admin')
+    
+    return redirect(url_for('admin_push'))
+
+@app.route('/admin/rq/immediate-push/<int:subscription_id>', methods=['POST'])
+@admin_required
+def admin_rq_immediate_push(subscription_id):
+    """立即推送指定订阅"""
+    try:
+        job = immediate_push_subscription(subscription_id)
+        
+        log_activity('INFO', 'admin', f'立即推送订阅 {subscription_id}: {job.id}', current_user.id, request.remote_addr)
+        flash(f'订阅 {subscription_id} 立即推送任务已排队: {job.id}', 'admin')
+        
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'立即推送订阅 {subscription_id} 失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'立即推送订阅 {subscription_id} 失败: {str(e)}', 'admin')
+    
+    return redirect(url_for('admin_push'))
+
+@app.route('/admin/rq/clear-failed', methods=['POST'])
+@admin_required
+def admin_rq_clear_failed():
+    """清空失败任务"""
+    try:
+        from rq_config import clear_failed_jobs
+        clear_failed_jobs()
+        
+        log_activity('INFO', 'admin', 'RQ失败任务已清空', current_user.id, request.remote_addr)
+        flash('RQ失败任务已清空', 'admin')
+        
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'清空RQ失败任务失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'清空RQ失败任务失败: {str(e)}', 'admin')
+    
+    return redirect(url_for('admin_push'))
+
+@app.route('/admin/rq/status')
+@admin_required
+def admin_rq_status():
+    """RQ状态API"""
+    try:
+        queue_info = get_queue_info()
+        failed_jobs = get_failed_jobs()
+        
+        return jsonify({
+            'status': 'success',
+            'queue_info': queue_info,
+            'failed_jobs_count': len(failed_jobs),
+            'failed_jobs': failed_jobs[:10]  # 只返回前10个失败任务
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+@app.route('/admin/rq/test', methods=['POST'])
+@admin_required
+def admin_rq_test():
+    """RQ连接测试"""
+    try:
+        from rq_config import enqueue_job
+        from tasks import test_rq_connection
+        
+        job = enqueue_job(test_rq_connection, priority='high')
+        
+        log_activity('INFO', 'admin', f'RQ连接测试已触发: {job.id}', current_user.id, request.remote_addr)
+        flash(f'RQ连接测试任务已排队: {job.id}', 'admin')
+        
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'RQ连接测试失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'RQ连接测试失败: {str(e)}', 'admin')
     
     return redirect(url_for('admin_push'))
 

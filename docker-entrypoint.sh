@@ -3,7 +3,19 @@ set -e
 
 echo "================================================"
 echo " PubMed Literature Push - Docker Entrypoint"
+echo " RQ Version with Redis Queue Support"
 echo "================================================"
+
+# 检查Redis连接
+echo "[检查] 验证Redis连接..."
+REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
+if redis-cli -u "$REDIS_URL" ping >/dev/null 2>&1; then
+    echo "[信息] Redis连接正常: $REDIS_URL"
+    export RQ_MODE=enabled
+else
+    echo "[警告] Redis连接失败，将使用APScheduler降级模式"
+    export RQ_MODE=fallback
+fi
 
 # 检查数据库是否存在且有效
 DB_VALID=false
@@ -46,8 +58,24 @@ fi
 # 删除 Flask 自动创建的 instance 目录（避免创建错误的数据库）
 rm -rf /app/instance
 
+# RQ相关初始化
+if [ "$RQ_MODE" = "enabled" ]; then
+    echo "[RQ] Redis队列模式已启用"
+    echo "[RQ] Worker配置: ${RQ_WORKER_NAME:-default-worker}"
+    echo "[RQ] 监听队列: ${RQ_QUEUES:-high,default,low}"
+    
+    # 测试RQ配置
+    if python -c "from rq_config import redis_conn; redis_conn.ping(); print('[RQ] 配置测试通过')" 2>/dev/null; then
+        echo "[RQ] RQ配置验证成功"
+    else
+        echo "[警告] RQ配置验证失败，但将继续启动"
+    fi
+else
+    echo "[调度器] 使用APScheduler降级模式"
+fi
+
 echo "[启动] 启动应用服务..."
 echo "================================================"
 
-# 执行传入的命令（gunicorn）
+# 执行传入的命令（gunicorn或其他）
 exec "$@"

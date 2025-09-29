@@ -1,14 +1,14 @@
 version: '3.8'
 
-# 生产环境Docker Compose配置 - RQ版本
-# 使用GitHub Actions构建的镜像 + Redis队列
+# RQ版本Docker Compose配置
+# 包含Redis队列和Worker进程
 
 services:
   # Redis服务
   redis:
     image: redis:7-alpine
-    container_name: pubmed-redis-prod
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    container_name: pubmed-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
       - ./logs/redis:/var/log/redis
@@ -20,23 +20,21 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
-    networks:
-      - pubmed-network
 
   # 主应用服务
   app:
-    image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
+    build: .
     container_name: pubmed-literature-push
     ports:
       - "5003:5003"
     env_file:
       - .env
     environment:
-      # 覆盖 .env 中的数据库路径，强制使用绝对路径
+      # 数据库配置
       - DATABASE_URL=sqlite:////app/data/pubmed_app.db
       # Redis配置
       - REDIS_URL=redis://redis:6379/0
-      # 时区配置（可通过环境变量覆盖，默认为亚洲/上海）
+      # 时区配置
       - TZ=${TZ:-Asia/Shanghai}
       # 日志配置
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -53,21 +51,23 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    networks:
-      - pubmed-network
 
-  # RQ Worker进程（生产环境多实例）
-  worker-1:
-    image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
-    container_name: pubmed-rq-worker-1
+  # RQ Worker进程
+  worker:
+    build: .
+    container_name: pubmed-rq-worker
     command: python rq_worker.py
     env_file:
       - .env
     environment:
+      # Redis配置
       - REDIS_URL=redis://redis:6379/0
-      - RQ_WORKER_NAME=pubmed-worker-prod-1
+      # Worker配置
+      - RQ_WORKER_NAME=pubmed-worker-docker
       - RQ_QUEUES=high,default,low
+      # 时区配置
       - TZ=${TZ:-Asia/Shanghai}
+      # 日志配置
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./data:/app/data
@@ -83,42 +83,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    networks:
-      - pubmed-network
 
-  worker-2:
-    image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
-    container_name: pubmed-rq-worker-2
-    command: python rq_worker.py
-    env_file:
-      - .env
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - RQ_WORKER_NAME=pubmed-worker-prod-2
-      - RQ_QUEUES=high,default,low
-      - TZ=${TZ:-Asia/Shanghai}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-    depends_on:
-      redis:
-        condition: service_healthy
-      app:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import redis; redis.Redis.from_url('redis://redis:6379/0').ping()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    networks:
-      - pubmed-network
-
-  # RQ Dashboard（生产环境监控）
+  # RQ Dashboard (可选)
   rq-dashboard:
     image: eoranged/rq-dashboard:latest
-    container_name: pubmed-rq-dashboard-prod
+    container_name: pubmed-rq-dashboard
     ports:
       - "9181:9181"
     environment:
@@ -128,10 +97,10 @@ services:
     depends_on:
       - redis
     restart: unless-stopped
-    networks:
-      - pubmed-network
+    profiles:
+      - dashboard
 
-  # Nginx反向代理
+  # Nginx反向代理 (生产环境)
   nginx:
     image: nginx:alpine
     container_name: pubmed-nginx
@@ -145,13 +114,13 @@ services:
     depends_on:
       - app
     restart: unless-stopped
-    networks:
-      - pubmed-network
+    profiles:
+      - production
 
 volumes:
   redis-data:
     driver: local
 
 networks:
-  pubmed-network:
-    driver: bridge
+  default:
+    name: pubmed-network

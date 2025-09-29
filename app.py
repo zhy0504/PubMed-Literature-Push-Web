@@ -1644,6 +1644,13 @@ def init_scheduler():
                     print("调度器锁文件已清理")
                 except:
                     pass
+            # 清理初始化标记文件
+            if os.path.exists('/app/data/scheduler_init_done'):
+                try:
+                    os.remove('/app/data/scheduler_init_done')
+                    print("调度器初始化标记已清理")
+                except:
+                    pass
         
         atexit.register(cleanup_scheduler)
         
@@ -3994,15 +4001,55 @@ def before_request_sync():
         sync_env_to_database()
         _sync_done = True
 
-# 在应用启动时初始化调度器（对Gunicorn生产环境友好）
-@app.before_first_request
-def initialize_scheduler():
-    """在第一个请求前初始化调度器"""
+# 应用上下文中初始化调度器（Flask 2.0+兼容）
+def initialize_scheduler_safely():
+    """安全初始化调度器，避免重复初始化"""
+    init_flag_file = '/app/data/scheduler_init_done'
+    
     try:
-        with app.app_context():
-            init_scheduler()
+        # 检查是否已经初始化
+        if scheduler.running:
+            print(f"调度器已在PID {os.getpid()}中运行")
+            return
+            
+        if os.path.exists(init_flag_file):
+            try:
+                with open(init_flag_file, 'r') as f:
+                    old_pid = int(f.read().strip())
+                # 检查进程是否存在
+                os.kill(old_pid, 0)
+                print(f"调度器已在进程 {old_pid} 中初始化，跳过")
+                return
+            except (OSError, ValueError):
+                # 进程不存在，删除标记文件
+                os.remove(init_flag_file)
+        
+        # 初始化调度器
+        print(f"进程 {os.getpid()} 开始初始化调度器...")
+        init_scheduler()
+        
+        # 创建成功标记
+        if scheduler.running:
+            with open(init_flag_file, 'w') as f:
+                f.write(str(os.getpid()))
+            print(f"调度器初始化成功 (PID: {os.getpid()})")
+        
     except Exception as e:
-        print(f"调度器自动初始化失败: {e}")
+        print(f"调度器初始化失败: {e}")
+        if os.path.exists(init_flag_file):
+            try:
+                os.remove(init_flag_file)
+            except:
+                pass
+
+# 在第一个请求时初始化调度器
+@app.before_request
+def ensure_scheduler_running():
+    """确保调度器在第一个请求时运行"""
+    if not hasattr(app, '_scheduler_init_attempted'):
+        with app.app_context():
+            initialize_scheduler_safely()
+        app._scheduler_init_attempted = True
 
 # 路由
 @app.route('/', methods=['GET', 'POST'])

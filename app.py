@@ -1747,6 +1747,9 @@ def check_and_push_articles():
             
             push_count = 0
             for user in users:
+                # 添加调试信息
+                app.logger.info(f"[调度器调试] 检查用户 {user.email}: 推送时间={user.push_time}, 频率={user.push_frequency}, 推送日={user.push_day}, 最后推送={user.last_push}")
+                
                 if should_push_now(user, hour, minute, weekday, day_of_month):
                     try:
                         app.logger.info(f"[调度器] 开始为用户 {user.email} 推送文章 (推送时间: {user.push_time}, 频率: {user.push_frequency})")
@@ -1785,18 +1788,25 @@ def check_and_push_articles():
 
 def should_push_now(user, current_hour, current_minute, current_weekday, current_day):
     """判断用户是否应该在当前时间推送"""
+    app.logger.info(f"[调度器调试] should_push_now: 用户={user.email}, 当前时间={current_hour}:{current_minute}, 当前星期={current_weekday}")
+    
     # 检查推送时间
     if user.push_time:
         try:
             push_hour, push_minute = map(int, user.push_time.split(':'))
             # 允许1分钟误差
-            if not (current_hour == push_hour and abs(current_minute - push_minute) <= 1):
+            time_match = (current_hour == push_hour and abs(current_minute - push_minute) <= 1)
+            app.logger.info(f"[调度器调试] should_push_now: 用户 {user.email} 设置时间 {push_hour}:{push_minute}, 时间匹配: {time_match}")
+            if not time_match:
                 return False
         except:
+            app.logger.error(f"[调度器调试] should_push_now: 用户 {user.email} 推送时间格式错误: {user.push_time}")
             return False
     else:
         # 默认推送时间8:00
-        if not (current_hour == 8 and current_minute <= 1):
+        default_time_match = (current_hour == 8 and current_minute <= 1)
+        app.logger.info(f"[调度器调试] should_push_now: 用户 {user.email} 使用默认时间8:00, 匹配: {default_time_match}")
+        if not default_time_match:
             return False
     
     # 检查推送频率
@@ -1820,17 +1830,23 @@ def should_push_daily(user):
 
 def should_push_weekly(user, current_weekday):
     """检查是否应该每周推送"""
+    app.logger.info(f"[调度器调试] should_push_weekly: 用户={user.email}, 当前星期={current_weekday}, 用户设置星期={user.push_day}, 最后推送={user.last_push}")
+    
     if not user.last_push:
+        app.logger.info(f"[调度器调试] should_push_weekly: 用户 {user.email} 从未推送过，返回True")
         return True
     
     # 检查今天是否是用户设置的推送日
     user_weekday = user.push_day or 'monday'
     if current_weekday != user_weekday:
+        app.logger.info(f"[调度器调试] should_push_weekly: 用户 {user.email} 今天不是推送日 ({current_weekday} != {user_weekday})，返回False")
         return False
     
     # 检查距离上次推送是否超过6天
     time_since_last = beijing_now() - user.last_push
-    return time_since_last.days >= 6
+    should_push = time_since_last.days >= 6
+    app.logger.info(f"[调度器调试] should_push_weekly: 用户 {user.email} 距离上次推送 {time_since_last.days} 天，应该推送: {should_push}")
+    return should_push
 
 def should_push_monthly(user, current_day):
     """检查是否应该每月推送"""
@@ -7897,7 +7913,35 @@ def admin_push():
             # 跨进程检测到有调度器运行，但本进程调度器未运行
             scheduler_status['next_run'] = '其他进程运行中'
     else:
-        scheduler_status['next_run'] = '调度器未运行'
+        # 调度器完全未运行，尝试自动启动
+        app.logger.info("[管理页面] 检测到调度器未运行，尝试自动启动")
+        try:
+            init_scheduler()
+            if scheduler.running:
+                app.logger.info("[管理页面] 调度器自动启动成功")
+                log_activity('INFO', 'system', '调度器通过管理页面自动启动', None, request.remote_addr)
+                # 重新获取状态
+                jobs = scheduler.get_jobs()
+                if jobs:
+                    next_run_time = jobs[0].next_run_time
+                    if next_run_time:
+                        if next_run_time.tzinfo is None:
+                            next_run_time = APP_TIMEZONE.localize(next_run_time)
+                        elif next_run_time.tzinfo != APP_TIMEZONE:
+                            next_run_time = next_run_time.astimezone(APP_TIMEZONE)
+                        scheduler_status['next_run'] = next_run_time.strftime('%Y-%m-%d %H:%M:%S')
+                        scheduler_status['auto_started'] = True
+                    else:
+                        scheduler_status['next_run'] = '未知'
+                else:
+                    scheduler_status['next_run'] = '无任务'
+                scheduler_status['running'] = True
+                scheduler_status['jobs'] = len(jobs) if jobs else 0
+            else:
+                scheduler_status['next_run'] = '自动启动失败'
+        except Exception as e:
+            app.logger.error(f"[管理页面] 调度器自动启动失败: {e}")
+            scheduler_status['next_run'] = '调度器未运行'
     
     # 获取推送统计
     stats = {
@@ -8034,6 +8078,11 @@ def admin_push():
                                         {% if scheduler_status.get('auto_fixed') %}
                                             <span class="badge bg-success ms-2">
                                                 <i class="fas fa-check-circle"></i> 已自动修复
+                                            </span>
+                                        {% endif %}
+                                        {% if scheduler_status.get('auto_started') %}
+                                            <span class="badge bg-info ms-2">
+                                                <i class="fas fa-play-circle"></i> 已自动启动
                                             </span>
                                         {% endif %}
                                     </td>
@@ -11064,8 +11113,21 @@ def update_scheduler_heartbeat():
 def scheduler_health_check():
     """调度器健康检查和自动修复"""
     try:
+        # 如果调度器未运行，尝试自动启动
         if not scheduler.running:
-            return
+            app.logger.info("[调度器健康检查] 检测到调度器未运行，尝试自动启动")
+            try:
+                init_scheduler()
+                if scheduler.running:
+                    app.logger.info("[调度器健康检查] 调度器自动启动成功")
+                    log_activity('INFO', 'system', '调度器自动启动成功', None, 'localhost')
+                    return
+                else:
+                    app.logger.warning("[调度器健康检查] 调度器自动启动失败")
+                    return
+            except Exception as e:
+                app.logger.error(f"[调度器健康检查] 调度器启动异常: {e}")
+                return
             
         jobs = scheduler.get_jobs()
         if not jobs:

@@ -360,7 +360,7 @@ def toggle_user_status(user_id):
         return False
 
 # 创建应用（禁用 instance 文件夹）
-app = Flask(__name__, instance_path='/tmp/instance')
+app = Flask(__name__)
 app.config.from_object(Config)
 
 # 配置日志
@@ -616,6 +616,9 @@ class Article(db.Model):
     keywords = db.Column(db.Text)
     issn = db.Column(db.String(20))  # 添加ISSN字段
     eissn = db.Column(db.String(20))  # 添加电子ISSN字段
+    # AI增强字段
+    abstract_cn = db.Column(db.Text)  # 中文翻译
+    brief_intro = db.Column(db.Text)  # AI生成的简介（一句话总结）
     created_at = db.Column(db.DateTime, default=beijing_utcnow)
 
 # 用户文章关联模型
@@ -1088,6 +1091,15 @@ class SimpleLiteraturePushService:
                     except Exception as e:
                         log_activity('WARNING', 'push', f'用户 {user.email} 关键词 "{keywords}" 的AI翻译失败: {str(e)}')
                 
+                # 使用AI生成文献简介（如果启用）
+                if SystemSetting.get_setting('ai_brief_intro_enabled', 'false') == 'true':
+                    try:
+                        log_activity('INFO', 'push', f'开始为用户 {user.email} 的关键词 "{keywords}" 的 {len(articles)} 篇文章生成AI简介')
+                        ai_service.batch_generate_brief_intros(articles)
+                        log_activity('INFO', 'push', f'用户 {user.email} 关键词 "{keywords}" 的文章AI简介生成完成')
+                    except Exception as e:
+                        log_activity('WARNING', 'push', f'用户 {user.email} 关键词 "{keywords}" 的AI简介生成失败: {str(e)}')
+                
                 # 为这个关键词单独发送邮件
                 single_subscription_data = {keywords: articles}
                 self._send_email_notification(user, articles, single_subscription_data)
@@ -1244,6 +1256,29 @@ class SimpleLiteraturePushService:
                     color: #495057; 
                 }}
                 
+                /* 简介汇总样式 */
+                .brief-summary {{
+                    background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+                    border: 1px solid #ffeaa7;
+                    border-radius: 12px;
+                    padding: 20px;
+                    margin-bottom: 30px;
+                    box-shadow: 0 3px 6px rgba(255, 193, 7, 0.1);
+                }}
+                .summary-title {{
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: #856404;
+                    margin-bottom: 15px;
+                    text-align: center;
+                }}
+                .summary-content {{
+                    font-size: 14px;
+                    line-height: 1.8;
+                    color: #6c5f00;
+                    text-align: left;
+                }}
+                
                 /* 文章样式 */
                 .article {{ 
                     border: 1px solid #e9ecef; 
@@ -1381,6 +1416,9 @@ class SimpleLiteraturePushService:
                     .header {{ padding: 20px 15px; }}
                     .header h1 {{ font-size: 24px; }}
                     .content {{ padding: 20px 15px; }}
+                    .brief-summary {{ padding: 15px; margin-bottom: 20px; }}
+                    .summary-title {{ font-size: 16px; }}
+                    .summary-content {{ font-size: 13px; line-height: 1.6; }}
                     .article {{ padding: 15px; }}
                     .article-header {{ flex-direction: column; align-items: flex-start; }}
                     .article-number {{ margin-bottom: 10px; margin-right: 0; }}
@@ -1413,6 +1451,24 @@ class SimpleLiteraturePushService:
                         <p>{greeting_text}</p>
                     </div>
         """
+        
+        # 添加文献简介汇总部分
+        brief_intros = []
+        for i, article in enumerate(articles, 1):
+            title = getattr(article, 'title', '未知标题')
+            brief_intro = getattr(article, 'brief_intro', '')
+            if brief_intro:
+                brief_intros.append(f"{i}、{title}：{brief_intro}")
+        
+        if brief_intros:
+            html_content += f"""
+                    <div class="brief-summary">
+                        <div class="summary-title">📋 今日推送文献简介</div>
+                        <div class="summary-content">
+                            {'<br>'.join(brief_intros)}
+                        </div>
+                    </div>
+            """
         
         # 获取PubMed API实例来查询期刊质量
         api = PubMedAPI()
@@ -1459,6 +1515,15 @@ class SimpleLiteraturePushService:
                         <div class="abstract-section">
                             <div class="abstract-title">🇨🇳 中文摘要</div>
                             <div class="abstract-content chinese-abstract">{article.abstract_translation}</div>
+                        </div>
+                    '''
+                
+                # 文献简介（如果有）
+                if hasattr(article, 'brief_intro') and article.brief_intro:
+                    abstract_html += f'''
+                        <div class="abstract-section">
+                            <div class="abstract-title">💡 简介</div>
+                            <div class="abstract-content brief-intro">{article.brief_intro}</div>
                         </div>
                     '''
             
@@ -1534,6 +1599,21 @@ class SimpleLiteraturePushService:
             
         content = f"PubMed 文献推送\\n\\n{greeting_text}\\n\\n"
         
+        # 添加文献简介汇总部分
+        brief_intros = []
+        for i, article in enumerate(articles, 1):
+            title = getattr(article, 'title', '未知标题')
+            brief_intro = getattr(article, 'brief_intro', '')
+            if brief_intro:
+                brief_intros.append(f"{i}、{title}：{brief_intro}")
+        
+        if brief_intros:
+            content += "📋 今日推送文献简介\\n"
+            content += "=" * 40 + "\\n"
+            for brief in brief_intros:
+                content += f"{brief}\\n\\n"
+            content += "=" * 40 + "\\n\\n"
+        
         api = PubMedAPI()
         
         for i, article in enumerate(articles, 1):
@@ -1582,11 +1662,15 @@ class SimpleLiteraturePushService:
             
             # 添加英文摘要
             if hasattr(article, 'abstract') and article.abstract:
-                content += f"   英文摘要: {article.abstract[:200]}{'...' if len(article.abstract) > 200 else ''}\\n"
+                content += f"   英文摘要: {article.abstract}\\n"
                 
                 # 添加中文摘要（如果有）
                 if hasattr(article, 'abstract_translation') and article.abstract_translation:
-                    content += f"   中文摘要: {article.abstract_translation[:200]}{'...' if len(article.abstract_translation) > 200 else ''}\\n"
+                    content += f"   中文摘要: {article.abstract_translation}\\n"
+                
+                # 添加文献简介（如果有）
+                if hasattr(article, 'brief_intro') and article.brief_intro:
+                    content += f"   简介: {article.brief_intro}\\n"
             
             content += "\\n"
         
@@ -1605,6 +1689,8 @@ def init_scheduler():
     """初始化定时推送调度器"""
     import os
     import socket
+    import time
+    import json
     
     # 在gunicorn环境下，只有主进程才应该运行调度器
     # 使用文件锁确保只有一个进程运行调度器
@@ -1616,18 +1702,41 @@ def init_scheduler():
             # 检查锁文件中的进程是否还在运行
             try:
                 with open(lock_file, 'r') as f:
-                    old_pid = int(f.read().strip())
+                    lock_data = json.loads(f.read().strip())
+                old_pid = lock_data.get('pid')
+                start_time = lock_data.get('start_time', 0)
+                last_heartbeat = lock_data.get('last_heartbeat', 0)
+                
                 # 检查进程是否存在
                 os.kill(old_pid, 0)
-                print(f"调度器已在进程 {old_pid} 中运行，跳过初始化")
-                return
-            except (OSError, ValueError):
+                
+                # 检查心跳时间（如果超过5分钟没有心跳，认为进程已死）
+                current_time = time.time()
+                if current_time - last_heartbeat > 300:  # 5分钟
+                    print(f"调度器进程 {old_pid} 心跳超时，重新初始化")
+                    os.remove(lock_file)
+                else:
+                    print(f"调度器已在进程 {old_pid} 中运行，跳过初始化")
+                    return
+            except (OSError, ValueError, json.JSONDecodeError, KeyError):
                 # 进程不存在或文件损坏，删除锁文件
-                os.remove(lock_file)
+                print("发现无效的调度器锁文件，正在清理...")
+                try:
+                    os.remove(lock_file)
+                except:
+                    pass
         
         # 创建新的锁文件
+        current_time = time.time()
+        lock_data = {
+            'pid': os.getpid(),
+            'start_time': current_time,
+            'last_heartbeat': current_time,
+            'hostname': socket.gethostname()
+        }
+        
         with open(lock_file, 'w') as f:
-            f.write(str(os.getpid()))
+            f.write(json.dumps(lock_data))
         
         print(f"进程 {os.getpid()} 开始初始化调度器")
         
@@ -1648,6 +1757,16 @@ def init_scheduler():
             trigger=trigger,
             id='push_check',
             name=job_name,
+            replace_existing=True,
+            max_instances=1
+        )
+        
+        # 添加心跳任务，每分钟更新一次锁文件
+        scheduler.add_job(
+            func=update_scheduler_heartbeat,
+            trigger=CronTrigger(minute='*'),  # 每分钟执行
+            id='scheduler_heartbeat',
+            name='调度器心跳',
             replace_existing=True,
             max_instances=1
         )
@@ -1679,6 +1798,28 @@ def init_scheduler():
         
     except Exception as e:
         print(f"调度器初始化失败: {e}")
+
+def update_scheduler_heartbeat():
+    """更新调度器心跳时间"""
+    import os
+    import json
+    import time
+    
+    lock_file = '/app/data/scheduler.lock'
+    try:
+        if os.path.exists(lock_file):
+            with open(lock_file, 'r') as f:
+                lock_data = json.loads(f.read().strip())
+            
+            # 更新心跳时间
+            lock_data['last_heartbeat'] = time.time()
+            
+            with open(lock_file, 'w') as f:
+                f.write(json.dumps(lock_data))
+            
+            app.logger.debug(f"调度器心跳更新: PID {os.getpid()}")
+    except Exception as e:
+        app.logger.error(f"更新调度器心跳失败: {e}")
 
 def check_and_push_articles():
     """检查并执行推送任务"""
@@ -1837,6 +1978,16 @@ class AIService:
 5. 不要包含"中文译文："等前缀
 
 英文摘要: {abstract}"""
+
+        # 默认文献简介提示词
+        self.default_brief_intro_prompt = """请为以下医学文献生成一句话简介，要求：
+1. 简洁明了，不超过50个中文字符
+2. 突出文献的核心发现或方法
+3. 使用通俗易懂的语言，避免过于复杂的医学术语
+4. 只返回简介内容，不要其他文字
+
+文献标题：{title}
+摘要：{abstract}"""
     
     def get_active_provider(self):
         """获取活跃的AI提供商，优先使用数据库配置，其次使用环境变量"""
@@ -1907,6 +2058,44 @@ class AIService:
             pass
             
         return None
+
+    def get_brief_intro_model(self):
+        """获取文献简介模型"""
+        # 获取配置的简介提供商和模型
+        intro_provider_id = SystemSetting.get_setting('ai_brief_intro_provider_id')
+        intro_model_id = SystemSetting.get_setting('ai_brief_intro_model_id')
+        
+        if not intro_provider_id or not intro_model_id:
+            # 如果没有配置专门的简介模型，尝试使用翻译模型
+            return self.get_configured_model('translator')
+        
+        try:
+            model = AIModel.query.filter_by(
+                id=int(intro_model_id),
+                provider_id=int(intro_provider_id),
+                is_available=True
+            ).first()
+            
+            if model and model.provider.is_active:
+                return model
+        except (ValueError, AttributeError):
+            pass
+        
+        return None
+
+    def get_brief_intro_prompt(self):
+        """获取文献简介提示词模板"""
+        # 从数据库获取简介提示词模板
+        template = AIPromptTemplate.query.filter_by(
+            prompt_type='brief_intro',
+            is_default=True
+        ).first()
+        
+        if template:
+            return template.prompt_content
+        else:
+            # 使用默认提示词
+            return self.default_brief_intro_prompt
     
     def create_openai_client(self, provider):
         """创建OpenAI兼容的客户端"""
@@ -2198,6 +2387,101 @@ class AIService:
             
         except Exception as e:
             app.logger.error(f"批量翻译失败: {str(e)}")
+
+    def generate_brief_intro(self, title, abstract):
+        """为文献生成一句话简介"""
+        try:
+            # 检查是否启用AI简介功能
+            brief_intro_enabled = SystemSetting.get_setting('ai_brief_intro_enabled', 'false') == 'true'
+            if not brief_intro_enabled:
+                return None
+            
+            # 获取配置的简介模型
+            intro_model = self.get_brief_intro_model()
+            if not intro_model:
+                app.logger.warning("未找到或未配置文献简介模型")
+                return None
+            
+            # 如果没有摘要，只使用标题
+            if not abstract:
+                abstract = "无摘要"
+            
+            # 获取简介提示词模板
+            prompt_template = self.get_brief_intro_prompt()
+            prompt = prompt_template.format(title=title, abstract=abstract)
+            
+            # 调用AI生成简介
+            client = self.create_openai_client(intro_model.provider)
+            
+            response = client.chat.completions.create(
+                model=intro_model.model_name,
+                messages=[
+                    {"role": "system", "content": "你是一个专业的医学文献分析专家。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3  # 稍微提高创造性以获得更生动的简介
+            )
+            
+            # 提取简介结果
+            brief_intro = response.choices[0].message.content.strip()
+            
+            app.logger.info(f"文献简介生成成功，标题长度: {len(title)}, 简介长度: {len(brief_intro)}")
+            return brief_intro
+            
+        except Exception as e:
+            app.logger.error(f"文献简介生成失败: {str(e)}")
+            return None
+
+    def batch_generate_brief_intros(self, articles):
+        """批量生成文献简介"""
+        try:
+            # 检查是否启用AI简介功能
+            brief_intro_enabled = SystemSetting.get_setting('ai_brief_intro_enabled', 'false') == 'true'
+            if not brief_intro_enabled:
+                app.logger.info("AI文献简介功能未启用")
+                return False
+            
+            # 获取配置的简介模型
+            intro_model = self.get_brief_intro_model()
+            if not intro_model:
+                app.logger.warning("未找到或未配置文献简介模型")
+                return False
+            
+            # 筛选需要生成简介的文章
+            articles_need_intro = [article for article in articles if not article.brief_intro]
+            
+            if not articles_need_intro:
+                app.logger.info("没有需要生成简介的文献")
+                return True
+            
+            # 获取批处理设置
+            batch_size = int(SystemSetting.get_setting('ai_brief_intro_batch_size', '10'))
+            batch_delay = float(SystemSetting.get_setting('ai_brief_intro_batch_delay', '2.0'))
+            
+            app.logger.info(f"开始批量生成 {len(articles_need_intro)} 篇文献简介，批次大小: {batch_size}, 间隔: {batch_delay}秒")
+            
+            # 分批处理
+            for i in range(0, len(articles_need_intro), batch_size):
+                batch = articles_need_intro[i:i+batch_size]
+                
+                for article in batch:
+                    brief_intro = self.generate_brief_intro(article.title, article.abstract)
+                    if brief_intro:
+                        article.brief_intro = brief_intro
+                
+                # 保存批次结果
+                db.session.commit()
+                
+                # 批次间延迟
+                if i + batch_size < len(articles_need_intro):
+                    time.sleep(batch_delay)
+            
+            app.logger.info(f"批量简介生成完成")
+            return True
+            
+        except Exception as e:
+            app.logger.error(f"批量简介生成失败: {str(e)}")
+            return False
     
     def test_connection(self, base_url, api_key):
         """测试AI连接"""
@@ -2555,6 +2839,100 @@ def get_ai_management_template():
                         </div>
                     </div>
                 </div>
+                
+                <!-- 文献简介生成配置 -->
+                <div class="col-md-12 mt-3">
+                    <div class="card border-warning h-100">
+                        <div class="card-header bg-warning text-dark">
+                            <h6 class="mb-0"><i class="fas fa-file-alt"></i> 文献简介生成配置</h6>
+                        </div>
+                        <div class="card-body">
+                            <form method="POST" action="/admin/ai/config/brief-intro">
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="briefIntroEnabled" 
+                                               name="enabled" value="true" {{ 'checked' if ai_settings.ai_brief_intro_enabled == 'true' }}>
+                                        <label class="form-check-label" for="briefIntroEnabled">
+                                            <strong>启用文献简介生成功能</strong>
+                                        </label>
+                                    </div>
+                                    <small class="text-muted">启用后在推送邮件中为每篇文献生成一句话简介</small>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label class="form-label">选择提供商：</label>
+                                    <select class="form-select" name="provider_id" id="briefIntroProviderSelect" onchange="updateBriefIntroModels()">
+                                        <option value="">请选择提供商</option>
+                                        {% for provider in providers %}
+                                            {% if provider.is_active and provider.models %}
+                                                <option value="{{ provider.id }}" data-provider-name="{{ provider.provider_name }}"
+                                                        {{ 'selected' if ai_settings.ai_brief_intro_provider_id == provider.id|string }}>
+                                                    {{ provider.provider_name }}
+                                                </option>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label class="form-label">选择模型：</label>
+                                    <select class="form-select" name="model_id" id="briefIntroModelSelect"
+                                            {{ 'disabled' if not ai_settings.ai_brief_intro_provider_id else '' }}>
+                                        <option value="">{{ '请先选择提供商' if not ai_settings.ai_brief_intro_provider_id else '请选择模型' }}</option>
+                                    </select>
+                                </div>
+                                
+                                <button type="submit" class="btn btn-warning w-100 mb-3">
+                                    <i class="fas fa-save"></i> 保存配置
+                                </button>
+                            </form>
+                            
+                            <!-- 测试功能 -->
+                            <div class="border-top pt-3 mt-3">
+                                <h6 class="small">测试文献简介生成：</h6>
+                                <form id="testBriefIntroForm" onsubmit="event.preventDefault(); testBriefIntro();">
+                                    <div class="mb-2">
+                                        <input type="text" class="form-control form-control-sm" name="title" placeholder="输入文献标题..." required>
+                                    </div>
+                                    <div class="mb-2">
+                                        <textarea class="form-control form-control-sm" name="abstract" rows="3" placeholder="输入文献摘要..." required></textarea>
+                                    </div>
+                                    <button type="submit" class="btn btn-outline-warning btn-sm">
+                                        <i class="fas fa-play"></i> 测试生成
+                                    </button>
+                                </form>
+                                <div id="briefIntroResult" class="mt-2"></div>
+                            </div>
+                            
+                            <!-- 当前配置显示 -->
+                            <div class="mt-3 p-3 bg-light rounded">
+                                <h6 class="small mb-2">当前配置：</h6>
+                                <p class="small mb-1">状态：
+                                    {% if ai_settings.ai_brief_intro_enabled == 'true' %}
+                                        <span class="badge bg-success">已启用</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">已禁用</span>
+                                    {% endif %}
+                                </p>
+                                <p class="small mb-0">模型：
+                                    {% if ai_settings.ai_brief_intro_provider_id and ai_settings.ai_brief_intro_model_id %}
+                                        {% for provider in providers %}
+                                            {% if provider.id|string == ai_settings.ai_brief_intro_provider_id %}
+                                                {% for model in provider.models %}
+                                                    {% if model.id|string == ai_settings.ai_brief_intro_model_id %}
+                                                        <code class="small">{{ provider.provider_name }} / {{ model.model_name }}</code>
+                                                    {% endif %}
+                                                {% endfor %}
+                                            {% endif %}
+                                        {% endfor %}
+                                    {% else %}
+                                        <code class="small">未配置</code>
+                                    {% endif %}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -2583,6 +2961,10 @@ def get_ai_management_template():
                 translator: {
                     providerId: "{{ ai_settings.ai_translation_provider_id }}",
                     modelId: "{{ ai_settings.ai_translation_model_id }}"
+                },
+                briefIntro: {
+                    providerId: "{{ ai_settings.ai_brief_intro_provider_id }}",
+                    modelId: "{{ ai_settings.ai_brief_intro_model_id }}"
                 }
             };
             
@@ -2604,6 +2986,16 @@ def get_ai_management_template():
                     if (savedConfig.translator.modelId) {
                         setTimeout(() => {
                             document.getElementById('translatorModelSelect').value = savedConfig.translator.modelId;
+                        }, 100);
+                    }
+                }
+                
+                // 初始化文献简介的模型选择
+                if (savedConfig.briefIntro.providerId) {
+                    updateBriefIntroModels();
+                    if (savedConfig.briefIntro.modelId) {
+                        setTimeout(() => {
+                            document.getElementById('briefIntroModelSelect').value = savedConfig.briefIntro.modelId;
                         }, 100);
                     }
                 }
@@ -2659,6 +3051,34 @@ def get_ai_management_template():
                     // 如果有保存的模型ID，自动选择
                     if (savedConfig.translator.modelId && providerId === savedConfig.translator.providerId) {
                         modelSelect.value = savedConfig.translator.modelId;
+                    }
+                } else {
+                    modelSelect.disabled = true;
+                }
+            }
+            
+            // 更新文献简介生成的模型选择
+            function updateBriefIntroModels() {
+                const providerSelect = document.getElementById('briefIntroProviderSelect');
+                const modelSelect = document.getElementById('briefIntroModelSelect');
+                const providerId = providerSelect.value;
+                
+                // 清空模型选择
+                modelSelect.innerHTML = '<option value="">请选择模型</option>';
+                
+                if (providerId && providerModelsData[providerId]) {
+                    const models = providerModelsData[providerId].models;
+                    models.forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = model.id;
+                        option.textContent = model.name;
+                        modelSelect.appendChild(option);
+                    });
+                    modelSelect.disabled = false;
+                    
+                    // 如果有保存的模型ID，自动选择
+                    if (savedConfig.briefIntro.modelId && providerId === savedConfig.briefIntro.providerId) {
+                        modelSelect.value = savedConfig.briefIntro.modelId;
                     }
                 } else {
                     modelSelect.disabled = true;
@@ -2721,6 +3141,37 @@ def get_ai_management_template():
                         `;
                     } else {
                         resultDiv.innerHTML = `<div class="alert alert-danger"><strong>翻译失败：</strong> ${data.message}</div>`;
+                    }
+                })
+                .catch(error => {
+                    resultDiv.innerHTML = `<div class="alert alert-danger"><strong>请求失败：</strong> ${error.message}</div>`;
+                });
+            }
+            
+            function testBriefIntro() {
+                const form = document.getElementById('testBriefIntroForm');
+                const formData = new FormData(form);
+                const resultDiv = document.getElementById('briefIntroResult');
+                
+                resultDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin"></i> 生成中...</div>';
+                
+                fetch('/admin/ai/test/brief-intro', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        resultDiv.innerHTML = `
+                            <div class="alert alert-success">
+                                <strong>生成成功！</strong><br>
+                                <small>${data.message}</small><br>
+                                <strong>生成的简介：</strong><br>
+                                <div class="border rounded p-2 mt-2">${data.brief_intro}</div>
+                            </div>
+                        `;
+                    } else {
+                        resultDiv.innerHTML = `<div class="alert alert-danger"><strong>生成失败：</strong> ${data.message}</div>`;
                     }
                 })
                 .catch(error => {
@@ -7286,15 +7737,44 @@ def admin_push():
         'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')  # 添加当前时间
     }
     
-    # 如果锁文件存在，读取PID
+    # 如果锁文件存在，读取PID和心跳信息
     if scheduler_status['lock_file_exists']:
         try:
             with open('/app/data/scheduler.lock', 'r') as f:
-                scheduler_status['scheduler_pid'] = int(f.read().strip())
+                content = f.read().strip()
+                try:
+                    # 尝试解析JSON格式（新格式）
+                    import json
+                    import time
+                    lock_data = json.loads(content)
+                    scheduler_status['scheduler_pid'] = lock_data.get('pid')
+                    scheduler_status['start_time'] = lock_data.get('start_time', 0)
+                    scheduler_status['last_heartbeat'] = lock_data.get('last_heartbeat', 0)
+                    scheduler_status['hostname'] = lock_data.get('hostname', 'unknown')
+                    
+                    # 计算心跳状态
+                    current_time = time.time()
+                    if scheduler_status['last_heartbeat']:
+                        heartbeat_age = current_time - scheduler_status['last_heartbeat']
+                        if heartbeat_age > 300:  # 5分钟
+                            scheduler_status['heartbeat_status'] = f'超时 ({int(heartbeat_age/60)}分钟前)'
+                        elif heartbeat_age > 60:  # 1分钟
+                            scheduler_status['heartbeat_status'] = f'延迟 ({int(heartbeat_age)}秒前)'
+                        else:
+                            scheduler_status['heartbeat_status'] = '正常'
+                    else:
+                        scheduler_status['heartbeat_status'] = '无心跳'
+                        
+                except json.JSONDecodeError:
+                    # 兼容旧格式（纯PID）
+                    scheduler_status['scheduler_pid'] = int(content)
+                    scheduler_status['heartbeat_status'] = '旧格式锁文件'
         except:
             scheduler_status['scheduler_pid'] = None
+            scheduler_status['heartbeat_status'] = '读取失败'
     else:
         scheduler_status['scheduler_pid'] = None
+        scheduler_status['heartbeat_status'] = '无锁文件'
     
     # 获取下次执行时间
     if scheduler.running:
@@ -7472,6 +7952,26 @@ def admin_push():
                                         {% endif %}
                                     </td>
                                 </tr>
+                                <tr>
+                                    <td><strong>心跳状态:</strong></td>
+                                    <td>
+                                        {% if scheduler_status['heartbeat_status'] == '正常' %}
+                                            <span class="text-success"><i class="fas fa-heartbeat"></i> {{ scheduler_status['heartbeat_status'] }}</span>
+                                        {% elif scheduler_status['heartbeat_status'] == '延迟' or '秒前' in scheduler_status['heartbeat_status'] %}
+                                            <span class="text-warning"><i class="fas fa-exclamation-triangle"></i> {{ scheduler_status['heartbeat_status'] }}</span>
+                                        {% elif scheduler_status['heartbeat_status'] == '超时' or '分钟前' in scheduler_status['heartbeat_status'] %}
+                                            <span class="text-danger"><i class="fas fa-times-circle"></i> {{ scheduler_status['heartbeat_status'] }}</span>
+                                        {% else %}
+                                            <span class="text-muted"><i class="fas fa-question-circle"></i> {{ scheduler_status['heartbeat_status'] }}</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% if scheduler_status['hostname'] %}
+                                <tr>
+                                    <td><strong>主机名:</strong></td>
+                                    <td>{{ scheduler_status['hostname'] }}</td>
+                                </tr>
+                                {% endif %}
                                 <tr>
                                     <td><strong>系统时区:</strong></td>
                                     <td>
@@ -9033,6 +9533,7 @@ def admin_ai():
     ai_settings = {
         'ai_query_builder_enabled': SystemSetting.get_setting('ai_query_builder_enabled', 'false'),
         'ai_translation_enabled': SystemSetting.get_setting('ai_translation_enabled', 'false'),
+        'ai_brief_intro_enabled': SystemSetting.get_setting('ai_brief_intro_enabled', 'false'),
         'ai_translation_batch_size': SystemSetting.get_setting('ai_translation_batch_size', '5'),
         'ai_translation_batch_delay': SystemSetting.get_setting('ai_translation_batch_delay', '3'),
         # 添加已保存的提供商和模型配置
@@ -9040,6 +9541,8 @@ def admin_ai():
         'ai_query_builder_model_id': SystemSetting.get_setting('ai_query_builder_model_id', ''),
         'ai_translation_provider_id': SystemSetting.get_setting('ai_translation_provider_id', ''),
         'ai_translation_model_id': SystemSetting.get_setting('ai_translation_model_id', ''),
+        'ai_brief_intro_provider_id': SystemSetting.get_setting('ai_brief_intro_provider_id', ''),
+        'ai_brief_intro_model_id': SystemSetting.get_setting('ai_brief_intro_model_id', ''),
     }
     
     return render_template_string(get_ai_management_template(), 
@@ -9178,6 +9681,7 @@ def admin_ai_settings():
         # 保存AI功能开关
         SystemSetting.set_setting('ai_query_builder_enabled', request.form.get('ai_query_builder_enabled', 'false'), '启用AI检索式生成', 'ai')
         SystemSetting.set_setting('ai_translation_enabled', request.form.get('ai_translation_enabled', 'false'), '启用AI摘要翻译', 'ai')
+        SystemSetting.set_setting('ai_brief_intro_enabled', request.form.get('ai_brief_intro_enabled', 'false'), '启用AI文献简介', 'ai')
         
         # 保存批量翻译设置
         batch_size = request.form.get('ai_translation_batch_size', '5')
@@ -9267,6 +9771,31 @@ def admin_ai_config_translator():
     
     return redirect(url_for('admin_ai'))
 
+@app.route('/admin/ai/config/brief-intro', methods=['POST'])
+@admin_required
+def admin_ai_config_brief_intro():
+    """配置文献简介生成"""
+    try:
+        # 保存功能开关
+        enabled = request.form.get('enabled', 'false')
+        SystemSetting.set_setting('ai_brief_intro_enabled', enabled, '启用AI文献简介', 'ai')
+        
+        # 保存提供商和模型选择
+        provider_id = request.form.get('provider_id', '').strip()
+        model_id = request.form.get('model_id', '').strip()
+        
+        if provider_id and model_id:
+            SystemSetting.set_setting('ai_brief_intro_provider_id', provider_id, '文献简介提供商ID', 'ai')
+            SystemSetting.set_setting('ai_brief_intro_model_id', model_id, '文献简介模型ID', 'ai')
+        
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 更新文献简介配置', current_user.id, request.remote_addr)
+        flash('文献简介配置保存成功', 'success')
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'文献简介配置保存失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'配置保存失败: {str(e)}', 'error')
+    
+    return redirect(url_for('admin_ai'))
+
 @app.route('/admin/ai/test/query', methods=['POST'])
 @admin_required
 def admin_ai_test_query():
@@ -9322,6 +9851,36 @@ def admin_ai_test_translation():
             
     except Exception as e:
         return jsonify({'success': False, 'message': f'翻译失败: {str(e)}'})
+
+@app.route('/admin/ai/test/brief-intro', methods=['POST'])
+@admin_required
+def admin_ai_test_brief_intro():
+    """测试AI文献简介生成"""
+    try:
+        title = request.form.get('title', '').strip()
+        abstract = request.form.get('abstract', '').strip()
+        if not title or not abstract:
+            return jsonify({'success': False, 'message': '请输入文献标题和摘要'})
+        
+        # 临时启用AI文献简介进行测试
+        original_setting = SystemSetting.get_setting('ai_brief_intro_enabled', 'false')
+        SystemSetting.set_setting('ai_brief_intro_enabled', 'true', '启用AI文献简介', 'ai')
+        
+        try:
+            brief_intro = ai_service.generate_brief_intro(title, abstract)
+            app.logger.info(f"测试生成的简介长度: {len(brief_intro)} 字符")
+            return jsonify({
+                'success': True, 
+                'brief_intro': brief_intro,
+                'message': f'测试成功。文献标题: {title[:50]}...',
+                'debug_info': f'生成的简介长度: {len(brief_intro)} 字符'
+            })
+        finally:
+            # 恢复原设置
+            SystemSetting.set_setting('ai_brief_intro_enabled', original_setting, '启用AI文献简介', 'ai')
+            
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'生成失败: {str(e)}'})
 
 @app.route('/admin/ai/prompts')
 @admin_required
@@ -9846,6 +10405,41 @@ if __name__ == '__main__':
                     print("Subscription表结构修复完成")
                 else:
                     print("Subscription表结构检查通过")
+                
+                # 检查Article表是否缺少字段
+                article_columns = {col['name'] for col in inspector.get_columns('article')}
+                
+                # Article模型应有的字段（AI增强字段）
+                expected_article_fields = {
+                    'abstract_cn': 'TEXT',  # 中文翻译
+                    'brief_intro': 'TEXT',  # AI生成的简介（一句话总结）
+                    'issn': 'VARCHAR(20)',  # ISSN字段
+                    'eissn': 'VARCHAR(20)'  # 电子ISSN字段
+                }
+                
+                # 检查缺失的Article字段
+                missing_article_fields = []
+                for field_name, field_def in expected_article_fields.items():
+                    if field_name not in article_columns:
+                        missing_article_fields.append((field_name, field_def))
+                
+                if missing_article_fields:
+                    print(f"发现Article表缺失 {len(missing_article_fields)} 个字段，正在修复...")
+                    
+                    # 使用原生SQL添加字段
+                    for field_name, field_def in missing_article_fields:
+                        try:
+                            with db.engine.connect() as conn:
+                                conn.execute(text(f'ALTER TABLE article ADD COLUMN {field_name} {field_def}'))
+                                conn.commit()
+                            print(f"已添加Article字段: {field_name}")
+                        except Exception as e:
+                            if 'duplicate column name' not in str(e):
+                                print(f"添加Article字段 {field_name} 失败: {e}")
+                    
+                    print("Article表结构修复完成")
+                else:
+                    print("Article表结构检查通过")
                     
             except Exception as e:
                 print(f"数据库表结构检查失败: {e}")
@@ -9889,6 +10483,7 @@ if __name__ == '__main__':
                 # AI功能设置
                 ('ai_query_builder_enabled', 'true', '启用AI检索式生成', 'ai'),
                 ('ai_translation_enabled', 'true', '启用AI摘要翻译', 'ai'),
+                ('ai_brief_intro_enabled', 'false', '启用AI文献简介', 'ai'),
                 ('ai_translation_batch_size', '20', '每批翻译数量', 'ai'),
                 ('ai_translation_batch_delay', '5', '批次间隔时间(秒)', 'ai'),
             ]

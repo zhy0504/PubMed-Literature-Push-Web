@@ -1991,7 +1991,7 @@ class AIService:
                 ).first()
                 
                 if model and model.provider.is_active:
-                    app.logger.info(f"使用专门配置的简介模型: {model.provider.name}/{model.model_id}")
+                    app.logger.info(f"使用专门配置的简介模型: {model.provider.provider_name}/{model.model_id}")
                     return {
                         'provider': model.provider,
                         'model': model.model_id
@@ -2003,7 +2003,7 @@ class AIService:
         app.logger.info("未配置专门的简介模型，继承翻译模型配置")
         translator_model = self.get_configured_model('translator')
         if translator_model:
-            app.logger.info(f"继承翻译配置: 提供商={translator_model.provider.name}, 模型={translator_model.model_id}")
+            app.logger.info(f"继承翻译配置: 提供商={translator_model.provider.provider_name}, 模型={translator_model.model_id}")
             return {
                 'provider': translator_model.provider,
                 'model': translator_model.model_id
@@ -10733,7 +10733,7 @@ def initialize_app():
     """应用初始化函数，多worker环境下含调度器恢复机制"""
     # 多worker环境下，进行基本的数据库检查和调度器恢复
     with app.app_context():
-        print("🔄 应用初始化...")
+        print("应用初始化...")
         
         # 获取实际数据库文件路径
         db_url = os.environ.get('DATABASE_URL')
@@ -10878,4 +10878,4 @@ def update_scheduler_heartbeat():
 try:
     initialize_app()
 except Exception as e:
-    print(f"⚠️ 应用初始化警告: {e}")
+    print(f"应用初始化警告: {e}")

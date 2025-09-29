@@ -1956,15 +1956,22 @@ def fallback_to_apscheduler():
         print("初始化APScheduler定时推送调度器...")
         
         # 获取推送检查频率设置
-        check_frequency = int(SystemSetting.get_setting('push_check_frequency', '1'))
+        check_frequency = float(SystemSetting.get_setting('push_check_frequency', '1'))
         
         # 添加定时任务
-        if check_frequency == 1:
-            trigger = CronTrigger(minute=0)  # 每小时的0分执行
-            job_name = '每小时推送检查'
+        if check_frequency == 0.25:
+            trigger = CronTrigger(minute='*/15')  # 每15分钟执行
+            job_name = '每15分钟推送检查'
+        elif check_frequency == 0.5:
+            trigger = CronTrigger(minute='*/30')  # 每30分钟执行  
+            job_name = '每30分钟推送检查'
+        elif check_frequency == 1:
+            # 每小时检查改为每15分钟检查，确保不错过任何推送时间
+            trigger = CronTrigger(minute='*/15')  # 每15分钟执行
+            job_name = '每15分钟推送检查'
         else:
-            trigger = CronTrigger(minute=0, hour=f'*/{check_frequency}')
-            job_name = f'每{check_frequency}小时推送检查'
+            trigger = CronTrigger(minute=0, hour=f'*/{int(check_frequency)}')
+            job_name = f'每{int(check_frequency)}小时推送检查'
         
         scheduler.add_job(
             func=check_and_push_articles,
@@ -2099,8 +2106,24 @@ def should_push_subscription_now(subscription, current_hour, current_minute, cur
     if subscription.push_time:
         try:
             push_hour, push_minute = map(int, subscription.push_time.split(':'))
-            # 允许1分钟误差
+            
+            # 智能时间匹配：允许补推错过的时间
+            current_total_minutes = current_hour * 60 + current_minute
+            push_total_minutes = push_hour * 60 + push_minute
+            
+            # 情况1：精确匹配（±1分钟）
             time_match = (current_hour == push_hour and abs(current_minute - push_minute) <= 1)
+            
+            # 情况2：补推逻辑 - 当前时间已过推送时间，但在同一小时内的后续检查中补推
+            if not time_match and current_hour == push_hour and current_minute > push_minute:
+                time_match = True  # 同一小时内的补推
+                app.logger.info(f"[补推] 订阅 {subscription.id} 补推逻辑触发：设定时间 {push_hour}:{push_minute:02d}，当前时间 {current_hour}:{current_minute:02d}")
+            
+            # 情况3：跨小时补推 - 推送时间已过且在1小时内
+            elif not time_match and current_total_minutes > push_total_minutes and current_total_minutes - push_total_minutes <= 60:
+                time_match = True  # 1小时内的跨小时补推
+                app.logger.info(f"[跨小时补推] 订阅 {subscription.id} 跨小时补推：设定时间 {push_hour}:{push_minute:02d}，当前时间 {current_hour}:{current_minute:02d}")
+            
             app.logger.info(f"[调度器调试] should_push_subscription_now: 订阅 {subscription.id} 设置时间 {push_hour}:{push_minute}, 时间匹配: {time_match}")
             if not time_match:
                 return False
@@ -2130,11 +2153,27 @@ def should_push_subscription_daily(subscription):
         app.logger.info(f"[调度器调试] should_push_subscription_daily: 订阅 {subscription.id} 从未搜索过，返回True")
         return True
     
-    # 检查距离上次搜索是否超过20小时（避免重复推送）
-    time_since_last = beijing_now() - subscription.last_search
-    should_push = time_since_last.total_seconds() > 20 * 3600
-    app.logger.info(f"[调度器调试] should_push_subscription_daily: 订阅 {subscription.id} 距离上次搜索 {time_since_last.total_seconds()/3600:.1f} 小时，应该推送: {should_push}")
-    return should_push
+    # 统一时区格式进行比较（避免 offset-naive 和 offset-aware 时间混合）
+    try:
+        current_time = beijing_now()
+        last_search_time = subscription.last_search
+        
+        # 如果 last_search 没有时区信息，假设它是北京时间
+        if last_search_time.tzinfo is None:
+            last_search_time = APP_TIMEZONE.localize(last_search_time)
+        # 如果时区不同，转换为北京时间
+        elif last_search_time.tzinfo != APP_TIMEZONE:
+            last_search_time = last_search_time.astimezone(APP_TIMEZONE)
+        
+        time_since_last = current_time - last_search_time
+        should_push = time_since_last.total_seconds() > 20 * 3600  # 20小时
+        app.logger.info(f"[调度器调试] should_push_subscription_daily: 订阅 {subscription.id} 距离上次搜索 {time_since_last.total_seconds()/3600:.1f} 小时，应该推送: {should_push}")
+        return should_push
+        
+    except Exception as e:
+        app.logger.error(f"[调度器调试] should_push_subscription_daily: 订阅 {subscription.id} 时间比较异常: {e}")
+        # 异常情况下默认允许推送
+        return True
 
 def should_push_subscription_weekly(subscription, current_weekday):
     """检查订阅是否应该每周推送"""
@@ -2150,11 +2189,27 @@ def should_push_subscription_weekly(subscription, current_weekday):
         app.logger.info(f"[调度器调试] should_push_subscription_weekly: 订阅 {subscription.id} 今天不是推送日 ({current_weekday} != {subscription_weekday})，返回False")
         return False
     
-    # 检查距离上次搜索是否超过6天
-    time_since_last = beijing_now() - subscription.last_search
-    should_push = time_since_last.days >= 6
-    app.logger.info(f"[调度器调试] should_push_subscription_weekly: 订阅 {subscription.id} 距离上次搜索 {time_since_last.days} 天，应该推送: {should_push}")
-    return should_push
+    # 统一时区格式进行比较
+    try:
+        current_time = beijing_now()
+        last_search_time = subscription.last_search
+        
+        # 如果 last_search 没有时区信息，假设它是北京时间
+        if last_search_time.tzinfo is None:
+            last_search_time = APP_TIMEZONE.localize(last_search_time)
+        # 如果时区不同，转换为北京时间
+        elif last_search_time.tzinfo != APP_TIMEZONE:
+            last_search_time = last_search_time.astimezone(APP_TIMEZONE)
+        
+        time_since_last = current_time - last_search_time
+        should_push = time_since_last.days >= 6
+        app.logger.info(f"[调度器调试] should_push_subscription_weekly: 订阅 {subscription.id} 距离上次搜索 {time_since_last.days} 天，应该推送: {should_push}")
+        return should_push
+        
+    except Exception as e:
+        app.logger.error(f"[调度器调试] should_push_subscription_weekly: 订阅 {subscription.id} 时间比较异常: {e}")
+        # 异常情况下默认允许推送
+        return True
 
 def should_push_subscription_monthly(subscription, current_day):
     """检查订阅是否应该每月推送"""
@@ -2166,9 +2221,25 @@ def should_push_subscription_monthly(subscription, current_day):
     if current_day != subscription_day:
         return False
     
-    # 检查距离上次搜索是否超过25天
-    time_since_last = beijing_now() - subscription.last_search
-    return time_since_last.days >= 25
+    # 统一时区格式进行比较（避免 offset-naive 和 offset-aware 时间混合）
+    try:
+        current_time = beijing_now()
+        last_search_time = subscription.last_search
+        
+        # 如果 last_search 没有时区信息，假设它是北京时间
+        if last_search_time.tzinfo is None:
+            last_search_time = APP_TIMEZONE.localize(last_search_time)
+        # 如果时区不同，转换为北京时间
+        elif last_search_time.tzinfo != APP_TIMEZONE:
+            last_search_time = last_search_time.astimezone(APP_TIMEZONE)
+        
+        time_since_last = current_time - last_search_time
+        return time_since_last.days >= 25
+        
+    except Exception as e:
+        app.logger.error(f"[调度器] 订阅 {subscription.id} 每月推送时间比较异常: {e}")
+        # 异常情况下默认允许推送
+        return True
 
 def should_push_now(user, current_hour, current_minute, current_weekday, current_day):
     """判断用户是否应该在当前时间推送"""
@@ -2208,9 +2279,25 @@ def should_push_daily(user):
     if not user.last_push:
         return True
     
-    # 检查距离上次推送是否超过20小时（避免重复推送）
-    time_since_last = beijing_now() - user.last_push
-    return time_since_last.total_seconds() > 20 * 3600
+    # 统一时区格式进行比较（避免 offset-naive 和 offset-aware 时间混合）
+    try:
+        current_time = beijing_now()
+        last_push_time = user.last_push
+        
+        # 如果 last_push 没有时区信息，假设它是北京时间
+        if last_push_time.tzinfo is None:
+            last_push_time = APP_TIMEZONE.localize(last_push_time)
+        # 如果时区不同，转换为北京时间
+        elif last_push_time.tzinfo != APP_TIMEZONE:
+            last_push_time = last_push_time.astimezone(APP_TIMEZONE)
+        
+        time_since_last = current_time - last_push_time
+        return time_since_last.total_seconds() > 20 * 3600  # 20小时
+        
+    except Exception as e:
+        app.logger.error(f"[调度器] 用户 {user.email} 时间比较异常: {e}")
+        # 异常情况下默认允许推送
+        return True
 
 def should_push_weekly(user, current_weekday):
     """检查是否应该每周推送"""
@@ -2226,11 +2313,27 @@ def should_push_weekly(user, current_weekday):
         app.logger.info(f"[调度器调试] should_push_weekly: 用户 {user.email} 今天不是推送日 ({current_weekday} != {user_weekday})，返回False")
         return False
     
-    # 检查距离上次推送是否超过6天
-    time_since_last = beijing_now() - user.last_push
-    should_push = time_since_last.days >= 6
-    app.logger.info(f"[调度器调试] should_push_weekly: 用户 {user.email} 距离上次推送 {time_since_last.days} 天，应该推送: {should_push}")
-    return should_push
+    # 统一时区格式进行比较（避免 offset-naive 和 offset-aware 时间混合）
+    try:
+        current_time = beijing_now()
+        last_push_time = user.last_push
+        
+        # 如果 last_push 没有时区信息，假设它是北京时间
+        if last_push_time.tzinfo is None:
+            last_push_time = APP_TIMEZONE.localize(last_push_time)
+        # 如果时区不同，转换为北京时间
+        elif last_push_time.tzinfo != APP_TIMEZONE:
+            last_push_time = last_push_time.astimezone(APP_TIMEZONE)
+        
+        time_since_last = current_time - last_push_time
+        should_push = time_since_last.days >= 6
+        app.logger.info(f"[调度器调试] should_push_weekly: 用户 {user.email} 距离上次推送 {time_since_last.days} 天，应该推送: {should_push}")
+        return should_push
+        
+    except Exception as e:
+        app.logger.error(f"[调度器] 用户 {user.email} 时间比较异常: {e}")
+        # 异常情况下默认允许推送
+        return True
 
 def should_push_monthly(user, current_day):
     """检查是否应该每月推送"""
@@ -2242,9 +2345,25 @@ def should_push_monthly(user, current_day):
     if current_day != user_day:
         return False
     
-    # 检查距离上次推送是否超过25天
-    time_since_last = beijing_now() - user.last_push
-    return time_since_last.days >= 25
+    # 统一时区格式进行比较（避免 offset-naive 和 offset-aware 时间混合）
+    try:
+        current_time = beijing_now()
+        last_push_time = user.last_push
+        
+        # 如果 last_push 没有时区信息，假设它是北京时间
+        if last_push_time.tzinfo is None:
+            last_push_time = APP_TIMEZONE.localize(last_push_time)
+        # 如果时区不同，转换为北京时间
+        elif last_push_time.tzinfo != APP_TIMEZONE:
+            last_push_time = last_push_time.astimezone(APP_TIMEZONE)
+        
+        time_since_last = current_time - last_push_time
+        return time_since_last.days >= 25
+        
+    except Exception as e:
+        app.logger.error(f"[调度器] 用户 {user.email} 每月推送时间比较异常: {e}")
+        # 异常情况下默认允许推送
+        return True
 
 def get_search_days_by_frequency(push_frequency):
     """根据推送频率确定搜索天数"""
@@ -9053,8 +9172,10 @@ def admin_system():
                                     </div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">定时推送检查频率 (小时)</label>
+                                    <label class="form-label">定时推送检查频率</label>
                                     <select class="form-control" name="push_check_frequency" required>
+                                        <option value="0.25" {% if settings.push_check_frequency == '0.25' %}selected{% endif %}>每15分钟检查一次（推荐）</option>
+                                        <option value="0.5" {% if settings.push_check_frequency == '0.5' %}selected{% endif %}>每30分钟检查一次</option>
                                         <option value="1" {% if settings.push_check_frequency == '1' %}selected{% endif %}>每1小时检查一次</option>
                                         <option value="2" {% if settings.push_check_frequency == '2' %}selected{% endif %}>每2小时检查一次</option>
                                         <option value="4" {% if settings.push_check_frequency == '4' %}selected{% endif %}>每4小时检查一次</option>
@@ -9062,7 +9183,10 @@ def admin_system():
                                         <option value="12" {% if settings.push_check_frequency == '12' %}selected{% endif %}>每12小时检查一次</option>
                                         <option value="24" {% if settings.push_check_frequency == '24' %}selected{% endif %}>每24小时检查一次</option>
                                     </select>
-                                    <div class="form-text">系统自动检查推送任务的频率，修改后自动重启调度器</div>
+                                    <div class="form-text">
+                                        推送时间精度取决于检查频率。15分钟检查可确保不错过任何推送时间。<br>
+                                        <strong>注意</strong>：1小时检查只能推送整点时间(如9:00)，会错过非整点时间(如9:15、9:30)
+                                    </div>
                                 </div>
                                 <div class="mb-3">
                                     <div class="form-check">

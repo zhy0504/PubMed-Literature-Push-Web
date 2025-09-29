@@ -3447,6 +3447,60 @@ def get_ai_prompts_template():
                     </div>
                     {% endif %}
                 </div>
+                
+                <!-- 简介生成提示词 -->
+                <div class="col-md-12 mt-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5><i class="fas fa-lightbulb"></i> 简介生成提示词</h5>
+                        </div>
+                        <div class="card-body">
+                            <form method="POST" action="/admin/ai/prompt/save">
+                                <input type="hidden" name="template_type" value="brief_intro">
+                                <div class="mb-3">
+                                    <label class="form-label">提示词内容</label>
+                                    <textarea name="prompt_content" class="form-control" rows="8" placeholder="输入简介生成提示词...">{% for prompt in brief_intro_prompts %}{% if prompt.is_default %}{{ prompt.prompt_content }}{% endif %}{% endfor %}</textarea>
+                                    <div class="form-text">使用 {title} 和 {abstract} 作为标题和摘要占位符</div>
+                                </div>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-save"></i> 保存简介提示词
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <!-- 历史版本 -->
+                    {% if brief_intro_prompts|length > 1 %}
+                    <div class="card mt-3">
+                        <div class="card-header">
+                            <h6><i class="fas fa-history"></i> 历史版本</h6>
+                        </div>
+                        <div class="card-body">
+                            {% for prompt in brief_intro_prompts %}
+                                {% if not prompt.is_default %}
+                                <div class="border rounded p-2 mb-2">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <span class="small text-muted">{{ prompt.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                                        <div>
+                                            <form method="POST" action="/admin/ai/prompt/{{ prompt.id }}/set-default" class="d-inline">
+                                                <button type="submit" class="btn btn-sm btn-outline-primary">设为默认</button>
+                                            </form>
+                                            <form method="POST" action="/admin/ai/prompt/{{ prompt.id }}/delete" class="d-inline"
+                                                  onsubmit="return confirm('确定删除此提示词版本？')">
+                                                <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                    <div class="small mt-1" style="max-height: 100px; overflow-y: auto;">
+                                        {{ prompt.prompt_content[:200] }}{% if prompt.prompt_content|length > 200 %}...{% endif %}
+                                    </div>
+                                </div>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
             </div>
         </div>
         
@@ -9888,10 +9942,12 @@ def admin_ai_prompts():
     """AI提示词管理"""
     query_prompts = AIPromptTemplate.query.filter_by(template_type='query_builder').all()
     translator_prompts = AIPromptTemplate.query.filter_by(template_type='translator').all()
+    brief_intro_prompts = AIPromptTemplate.query.filter_by(template_type='brief_intro').all()
     
     return render_template_string(get_ai_prompts_template(), 
                                 query_prompts=query_prompts,
-                                translator_prompts=translator_prompts)
+                                translator_prompts=translator_prompts,
+                                brief_intro_prompts=brief_intro_prompts)
 
 @app.route('/admin/ai/prompt/save', methods=['POST'])
 @admin_required
@@ -10603,6 +10659,19 @@ if __name__ == '__main__':
 
 英文摘要: {abstract}
 中文译文:""",
+                    'is_default': True
+                },
+                {
+                    'template_type': 'brief_intro',
+                    'prompt_content': """请为以下医学文献生成一句话简介，要求：
+1. 突出文献的核心发现或主要贡献
+2. 使用简洁明了的中文表达
+3. 控制在30-50字以内
+4. 只返回简介内容，不要其他文字
+
+标题: {title}
+摘要: {abstract}
+简介:""",
                     'is_default': True
                 }
             ]

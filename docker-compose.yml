@@ -101,7 +101,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       # Scheduler配置
       - RQ_SCHEDULER_NAME=pubmed-scheduler-docker
-      - RQ_SCHEDULER_INTERVAL=300
+      # RQ_SCHEDULER_INTERVAL 已移除，从数据库读取 push_check_frequency
       # 时区配置
       - TZ=${TZ:-Asia/Shanghai}
       # 日志配置

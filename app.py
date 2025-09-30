@@ -9038,14 +9038,15 @@ def admin_system():
             elif 'push_config' in request.form:
                 SystemSetting.set_setting('push_daily_time', request.form.get('push_daily_time', '09:00'), '默认每日推送时间', 'push')
                 SystemSetting.set_setting('push_max_articles', request.form.get('push_max_articles', '50'), '每次推送最大文章数', 'push')
-                SystemSetting.set_setting('push_check_frequency', request.form.get('push_check_frequency', '1'), '定时推送检查频率(小时)', 'push')
+                SystemSetting.set_setting('push_check_frequency', request.form.get('push_check_frequency', '0.0833'), 'RQ调度器扫描间隔(小时)', 'push')
                 SystemSetting.set_setting('push_enabled', request.form.get('push_enabled', 'true'), '启用自动推送', 'push')
 
-                # RQ调度系统：不需要重新初始化调度器
-                # 订阅任务已通过RQ Scheduler独立调度，无需依赖检查频率
-                app.logger.info(f"推送配置已保存 - 注意：RQ调度模式下，订阅任务独立调度，不受检查频率影响")
+                # 记录配置变更
+                new_freq = request.form.get('push_check_frequency', '0.0833')
+                seconds = int(float(new_freq) * 3600)
+                app.logger.info(f"RQ调度器扫描间隔已更新为: {seconds}秒 ({seconds/60:.1f}分钟)")
 
-                flash('推送配置已保存（RQ调度模式：订阅任务独立调度）', 'admin')
+                flash(f'推送配置已保存！新的扫描间隔: {seconds}秒。请执行 docker compose restart scheduler 使配置生效。', 'admin')
             
             
             # 保存系统配置
@@ -9193,24 +9194,27 @@ def admin_system():
                                     </div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">定时推送检查频率</label>
+                                    <label class="form-label">RQ调度器扫描间隔</label>
                                     <select class="form-control" name="push_check_frequency" required>
-                                        <option value="0.25" {% if settings.push_check_frequency == '0.25' %}selected{% endif %}>每15分钟检查一次（推荐）</option>
-                                        <option value="0.5" {% if settings.push_check_frequency == '0.5' %}selected{% endif %}>每30分钟检查一次</option>
-                                        <option value="1" {% if settings.push_check_frequency == '1' %}selected{% endif %}>每1小时检查一次</option>
-                                        <option value="2" {% if settings.push_check_frequency == '2' %}selected{% endif %}>每2小时检查一次</option>
-                                        <option value="4" {% if settings.push_check_frequency == '4' %}selected{% endif %}>每4小时检查一次</option>
-                                        <option value="6" {% if settings.push_check_frequency == '6' %}selected{% endif %}>每6小时检查一次</option>
-                                        <option value="12" {% if settings.push_check_frequency == '12' %}selected{% endif %}>每12小时检查一次</option>
-                                        <option value="24" {% if settings.push_check_frequency == '24' %}selected{% endif %}>每24小时检查一次</option>
+                                        <option value="0.0167" {% if settings.push_check_frequency == '0.0167' %}selected{% endif %}>每1分钟 (60秒) - 最精确</option>
+                                        <option value="0.05" {% if settings.push_check_frequency == '0.05' %}selected{% endif %}>每3分钟 (180秒)</option>
+                                        <option value="0.0833" {% if settings.push_check_frequency == '0.0833' %}selected{% endif %}>每5分钟 (300秒) - 推荐</option>
+                                        <option value="0.1667" {% if settings.push_check_frequency == '0.1667' %}selected{% endif %}>每10分钟 (600秒)</option>
+                                        <option value="0.25" {% if settings.push_check_frequency == '0.25' %}selected{% endif %}>每15分钟 (900秒)</option>
+                                        <option value="0.5" {% if settings.push_check_frequency == '0.5' %}selected{% endif %}>每30分钟 (1800秒)</option>
+                                        <option value="1" {% if settings.push_check_frequency == '1' %}selected{% endif %}>每1小时 (3600秒)</option>
                                     </select>
                                     <div class="form-text">
                                         <div class="alert alert-info mt-2 mb-0">
-                                            <strong>RQ调度模式说明：</strong><br>
-                                            • 当前使用 <strong>RQ Scheduler</strong> 进行精确调度<br>
-                                            • 每个订阅根据其推送时间独立调度<br>
-                                            • 此检查频率设置仅用于兼容性保留，不影响实际调度<br>
-                                            • 推送任务会在设定的准确时间触发
+                                            <strong><i class="fas fa-info-circle"></i> RQ Scheduler 工作原理：</strong><br>
+                                            <ul class="mb-2 mt-2">
+                                                <li><strong>精确调度</strong>：每个订阅有独立的触发时间（如 09:30）</li>
+                                                <li><strong>扫描间隔</strong>：调度器每隔此间隔扫描Redis，将到期任务移入执行队列</li>
+                                                <li><strong>推送延迟</strong>：最多延迟 = 扫描间隔（如5分钟 → 最多延迟5分钟）</li>
+                                                <li><strong>性能影响</strong>：间隔越短越精确，但Redis扫描越频繁</li>
+                                            </ul>
+                                            <strong class="text-warning"><i class="fas fa-exclamation-triangle"></i> 重要：</strong> 修改此配置后需要<strong>重启调度器容器</strong>才能生效：<br>
+                                            <code>docker compose restart scheduler</code>
                                         </div>
                                     </div>
                                 </div>
@@ -11464,7 +11468,7 @@ if __name__ == '__main__':
                 ('push_month_day', '1', '默认每月推送日(几号)', 'push'),
                 ('push_daily_time', '09:00', '默认每日推送时间', 'push'),
                 ('push_max_articles', '50', '每次推送最大文章数', 'push'),
-                ('push_check_frequency', '1', '定时推送检查频率(小时)', 'push'),
+                ('push_check_frequency', '0.0833', 'RQ调度器扫描间隔(小时)', 'push'),  # 默认5分钟
                 ('push_enabled', 'true', '启用自动推送', 'push'),
                 ('mail_server', 'smtp.gmail.com', 'SMTP服务器地址', 'mail'),
                 ('mail_port', '587', 'SMTP端口', 'mail'),

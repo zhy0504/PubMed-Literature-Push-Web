@@ -18,8 +18,7 @@ if current_dir not in sys.path:
 from flask import Flask
 from app import app, db, User, Subscription, beijing_now
 # 延迟导入避免循环导入问题
-# from app import handle_single_subscription as original_handle_single_subscription
-from app import log_activity, SystemSetting
+from app import log_activity, SystemSetting, push_service
 import logging
 
 def process_subscription_push(subscription_id: int):
@@ -35,54 +34,58 @@ def process_subscription_push(subscription_id: int):
                 error_msg = f"订阅 {subscription_id} 不存在"
                 logging.error(f"[RQ任务] {error_msg}")
                 return {"status": "error", "message": error_msg}
-            
+
             if not subscription.is_active:
                 info_msg = f"订阅 {subscription_id} 已禁用，跳过推送"
                 logging.info(f"[RQ任务] {info_msg}")
                 return {"status": "skipped", "message": info_msg}
-            
+
             user = subscription.user
             if not user or not user.is_active:
                 error_msg = f"订阅 {subscription_id} 的用户不存在或已禁用"
                 logging.error(f"[RQ任务] {error_msg}")
                 return {"status": "error", "message": error_msg}
-            
+
             start_time = datetime.datetime.now()
             logging.info(f"[RQ任务] 开始处理订阅 {subscription_id} (用户: {user.email})")
-            
-            # 延迟导入避免循环导入问题
-            from app import handle_single_subscription as original_handle_single_subscription
-            
-            # 调用原有的推送处理逻辑
-            result = original_handle_single_subscription(subscription_id)
-            
+
+            # 调用推送服务处理订阅
+            result = push_service.process_single_subscription(subscription_id)
+
             end_time = datetime.datetime.now()
             duration = (end_time - start_time).total_seconds()
-            
-            if result and result.get('articles_count', 0) > 0:
-                success_msg = f"订阅 {subscription_id} 推送成功: {result['articles_count']} 篇文章"
-                log_activity('INFO', 'rq_push', success_msg)
-                logging.info(f"[RQ任务] {success_msg} (耗时: {duration:.2f}秒)")
-                
+
+            if result and result.get('success'):
+                articles_count = result.get('articles_found', 0)
+                if articles_count > 0:
+                    success_msg = f"订阅 {subscription_id} 推送成功: {articles_count} 篇文章"
+                    log_activity('INFO', 'rq_push', success_msg)
+                    logging.info(f"[RQ任务] {success_msg} (耗时: {duration:.2f}秒)")
+                else:
+                    info_msg = f"订阅 {subscription_id} 无新文章"
+                    logging.info(f"[RQ任务] {info_msg} (耗时: {duration:.2f}秒)")
+
                 # 调度下次推送
                 schedule_next_push_for_subscription(subscription)
-                
+
                 return {
                     "status": "success",
                     "subscription_id": subscription_id,
-                    "articles_count": result['articles_count'],
+                    "articles_count": articles_count,
                     "duration": duration
                 }
             else:
-                info_msg = f"订阅 {subscription_id} 无新文章"
-                logging.info(f"[RQ任务] {info_msg} (耗时: {duration:.2f}秒)")
-                
-                # 调度下次推送
+                error_msg = result.get('error', '推送服务返回失败') if result else '推送服务返回空结果'
+                log_activity('ERROR', 'rq_push', f"订阅 {subscription_id} 推送失败: {error_msg}")
+                logging.error(f"[RQ任务] 订阅 {subscription_id} 推送失败: {error_msg} (耗时: {duration:.2f}秒)")
+
+                # 推送失败也要调度下次推送，避免订阅停止
                 schedule_next_push_for_subscription(subscription)
-                
+
                 return {
-                    "status": "no_articles",
+                    "status": "error",
                     "subscription_id": subscription_id,
+                    "message": error_msg,
                     "duration": duration
                 }
                 

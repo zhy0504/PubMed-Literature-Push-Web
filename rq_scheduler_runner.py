@@ -34,17 +34,46 @@ def setup_logging():
         ]
     )
 
+def get_scheduler_interval():
+    """获取调度器扫描间隔配置
+
+    优先级:
+    1. 环境变量 RQ_SCHEDULER_INTERVAL (直接秒数)
+    2. 数据库配置 push_check_frequency (小时数，转换为秒)
+    3. 默认值 300秒 (5分钟)
+    """
+    # 1. 优先使用环境变量（保持向后兼容）
+    env_interval = os.environ.get('RQ_SCHEDULER_INTERVAL')
+    if env_interval:
+        return int(env_interval)
+
+    # 2. 尝试从数据库读取配置
+    try:
+        from app import app, SystemSetting
+        with app.app_context():
+            # push_check_frequency 存储的是小时数，需要转换为秒
+            hours = float(SystemSetting.get_setting('push_check_frequency', '0.0833'))  # 默认5分钟 = 0.0833小时
+            seconds = int(hours * 3600)
+            # 限制范围：最小60秒，最大86400秒(24小时)
+            return max(60, min(seconds, 86400))
+    except Exception as e:
+        logging.warning(f"无法从数据库读取配置: {e}，使用默认值")
+
+    # 3. 默认值：300秒 (5分钟)
+    return 300
+
 def main():
     setup_logging()
     logger = logging.getLogger(__name__)
 
     # 获取调度器参数
     scheduler_name = os.environ.get('RQ_SCHEDULER_NAME', 'pubmed-scheduler')
-    check_interval = int(os.environ.get('RQ_SCHEDULER_INTERVAL', '10'))  # 默认10秒
+    check_interval = get_scheduler_interval()
 
     logger.info("=" * 60)
     logger.info(f"启动RQ Scheduler: {scheduler_name}")
-    logger.info(f"检查间隔: {check_interval}秒")
+    logger.info(f"检查间隔: {check_interval}秒 ({check_interval/60:.1f}分钟)")
+    logger.info(f"配置来源: {'环境变量' if os.environ.get('RQ_SCHEDULER_INTERVAL') else '数据库配置'}")
     logger.info(f"当前时间: {datetime.now()}")
     logger.info("=" * 60)
 

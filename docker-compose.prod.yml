@@ -64,6 +64,7 @@ services:
     env_file:
       - .env
     environment:
+      - DATABASE_URL=sqlite:////app/data/pubmed_app.db
       - REDIS_URL=redis://redis:6379/0
       - RQ_WORKER_NAME=pubmed-worker-prod-1
       - RQ_QUEUES=high,default,low
@@ -94,6 +95,7 @@ services:
     env_file:
       - .env
     environment:
+      - DATABASE_URL=sqlite:////app/data/pubmed_app.db
       - REDIS_URL=redis://redis:6379/0
       - RQ_WORKER_NAME=pubmed-worker-prod-2
       - RQ_QUEUES=high,default,low
@@ -125,6 +127,8 @@ services:
     env_file:
       - .env
     environment:
+      # 数据库配置
+      - DATABASE_URL=sqlite:////app/data/pubmed_app.db
       # Redis配置
       - REDIS_URL=redis://redis:6379/0
       # Scheduler配置

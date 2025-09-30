@@ -118,6 +118,10 @@ def cancel_subscription_jobs(subscription_id: int):
 
 def get_queue_info():
     """获取队列状态信息"""
+    # 获取调度任务数量（兼容生成器）
+    scheduled_jobs = scheduler.get_jobs()
+    scheduled_count = len(list(scheduled_jobs)) if hasattr(scheduled_jobs, '__iter__') else 0
+
     return {
         'high': {
             'length': len(high_priority_queue),
@@ -137,7 +141,7 @@ def get_queue_info():
             'failed': len(low_priority_queue.failed_job_registry),
             'finished': len(low_priority_queue.finished_job_registry)
         },
-        'scheduled': len(scheduler.get_jobs())
+        'scheduled': scheduled_count
     }
 
 def get_failed_jobs():

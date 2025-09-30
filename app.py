@@ -6263,16 +6263,24 @@ def delete_subscription(sub_id):
     subscription = Subscription.query.filter_by(id=sub_id, user_id=current_user.id).first()
     if subscription:
         keywords = subscription.keywords
-        
+
+        # 取消RQ Scheduler中的调度任务
+        try:
+            from rq_config import cancel_subscription_jobs
+            cancel_subscription_jobs(sub_id)
+            app.logger.info(f"已取消订阅 {sub_id} 的RQ调度任务")
+        except Exception as e:
+            app.logger.warning(f"取消订阅 {sub_id} 的RQ调度任务失败: {e}")
+
         # 先更新相关的UserArticle记录，将subscription_id设为NULL
         user_articles = UserArticle.query.filter_by(subscription_id=sub_id).all()
         for user_article in user_articles:
             user_article.subscription_id = None
-        
+
         # 删除订阅
         db.session.delete(subscription)
         db.session.commit()
-        
+
         log_activity('INFO', 'subscription', f'用户 {current_user.email} 删除订阅: {keywords}', current_user.id, request.remote_addr)
         flash('订阅已删除', 'info')
     return redirect(url_for('subscriptions'))
@@ -7731,10 +7739,18 @@ def admin_subscriptions():
     return render_template_string(template, subscriptions=subscriptions)
 
 @app.route('/admin/subscriptions/<int:sub_id>/delete')
-@admin_required  
+@admin_required
 def admin_delete_subscription(sub_id):
     """管理员删除订阅"""
     try:
+        # 取消RQ Scheduler中的调度任务
+        try:
+            from rq_config import cancel_subscription_jobs
+            cancel_subscription_jobs(sub_id)
+            app.logger.info(f"[管理员] 已取消订阅 {sub_id} 的RQ调度任务")
+        except Exception as e:
+            app.logger.warning(f"[管理员] 取消订阅 {sub_id} 的RQ调度任务失败: {e}")
+
         # 使用原生SQL删除订阅
         result = db.session.execute(
             db.text("DELETE FROM subscription WHERE id = :sub_id"),

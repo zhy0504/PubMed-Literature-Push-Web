@@ -5120,7 +5120,17 @@ def ensure_scheduler_running():
 @app.route('/', methods=['GET', 'POST'])
 def index():
     search_results = None
-    
+    test_subscription = None
+
+    # 处理测试订阅请求(从URL参数)
+    if current_user.is_authenticated:
+        test_sub_id = request.args.get('test_subscription_id')
+        if test_sub_id:
+            test_subscription = Subscription.query.filter_by(
+                id=int(test_sub_id),
+                user_id=current_user.id
+            ).first()
+
     # 处理搜索请求
     if request.method == 'POST' and current_user.is_authenticated:
         try:
@@ -5220,8 +5230,8 @@ def index():
         except Exception as e:
             flash(f'搜索失败: {str(e)}', 'error')
             log_activity('ERROR', 'search', f'搜索失败: {str(e)}', current_user.id, request.remote_addr)
-    
-    return render_template_string(get_index_template(), search_results=search_results)
+
+    return render_template_string(get_index_template(), search_results=search_results, test_subscription=test_subscription)
 
 def get_index_template():
     """获取主页模板"""
@@ -5543,7 +5553,7 @@ def get_index_template():
         <!-- JavaScript -->
         <script>
         // 删除搜索模式切换功能，因为现在只有一种搜索模式
-        
+
         // 防止重复提交搜索表单
         function disableSearchButton(button) {
             button.disabled = true;
@@ -5553,6 +5563,74 @@ def get_index_template():
                 button.closest('form').submit();
             }, 100);
         }
+
+        // 测试订阅功能 - 自动填充和提交表单
+        {% if test_subscription %}
+        document.addEventListener('DOMContentLoaded', function() {
+            var form = document.getElementById('searchForm');
+            var subscription = {{ test_subscription|tojson }};
+
+            // 填充关键词
+            var keywordsInput = form.querySelector('input[name="keywords"]');
+            if (keywordsInput) {
+                keywordsInput.value = subscription.keywords;
+            }
+
+            // 填充ISSN筛选
+            if (subscription.exclude_no_issn) {
+                var excludeNoIssnCheckbox = form.querySelector('input[name="exclude_no_issn"]');
+                if (excludeNoIssnCheckbox) {
+                    excludeNoIssnCheckbox.checked = true;
+                }
+            }
+
+            // 填充JCR分区
+            if (subscription.jcr_quartiles) {
+                var jcrQuartiles = subscription.jcr_quartiles.split(',');
+                jcrQuartiles.forEach(function(quartile) {
+                    var checkbox = form.querySelector('input[name="jcr_quartile"][value="' + quartile.trim() + '"]');
+                    if (checkbox) {
+                        checkbox.checked = true;
+                    }
+                });
+            }
+
+            // 填充最小影响因子
+            if (subscription.min_impact_factor) {
+                var minIfInput = form.querySelector('input[name="min_if"]');
+                if (minIfInput) {
+                    minIfInput.value = subscription.min_impact_factor;
+                }
+            }
+
+            // 填充中科院分区
+            if (subscription.cas_categories) {
+                var casCategories = subscription.cas_categories.split(',');
+                casCategories.forEach(function(category) {
+                    var checkbox = form.querySelector('input[name="zky_category"][value="' + category.trim() + '"]');
+                    if (checkbox) {
+                        checkbox.checked = true;
+                    }
+                });
+            }
+
+            // 填充Top期刊筛选
+            if (subscription.cas_top_only) {
+                var topOnlyCheckbox = form.querySelector('input[name="zky_top_only"]');
+                if (topOnlyCheckbox) {
+                    topOnlyCheckbox.checked = true;
+                }
+            }
+
+            // 自动提交表单
+            setTimeout(function() {
+                var submitButton = form.querySelector('button[type="submit"]');
+                if (submitButton) {
+                    submitButton.click();
+                }
+            }, 500);
+        });
+        {% endif %}
         </script>
         <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
     </body>
@@ -6297,14 +6375,14 @@ def delete_subscription(sub_id):
 def search_subscription(sub_id):
     subscription = Subscription.query.filter_by(id=sub_id, user_id=current_user.id).first()
     if subscription:
-        # 模拟搜索表单提交
-        from werkzeug.datastructures import ImmutableMultiDict
-        form_data = ImmutableMultiDict([('keywords', subscription.keywords), ('action', 'search')])
-        
-        # 创建临时request对象
-        with app.test_request_context(method='POST', data=form_data):
-            return search()
-    
+        # 直接重定向到主页,并通过URL参数传递订阅信息
+        from urllib.parse import urlencode
+        params = {
+            'test_subscription_id': subscription.id,
+            'keywords': subscription.keywords
+        }
+        return redirect(url_for('index') + '?' + urlencode(params))
+
     flash('订阅不存在', 'warning')
     return redirect(url_for('subscriptions'))
 
@@ -10880,7 +10958,7 @@ def edit_subscription(subscription_id):
     subscription = Subscription.query.filter_by(id=subscription_id, user_id=current_user.id).first()
     if not subscription:
         flash('订阅不存在', 'error')
-        return redirect(url_for('profile'))
+        return redirect(url_for('subscriptions'))
     
     edit_template = """
     <!DOCTYPE html>
@@ -11090,7 +11168,7 @@ def edit_subscription(subscription_id):
                                 <hr>
                                 
                                 <div class="d-flex justify-content-between">
-                                    <a href="/profile" class="btn btn-secondary">
+                                    <a href="/subscriptions" class="btn btn-secondary">
                                         <i class="fas fa-arrow-left"></i> 返回
                                     </a>
                                     <button type="submit" class="btn btn-primary">
@@ -11142,7 +11220,7 @@ def update_subscription(subscription_id):
     subscription = Subscription.query.filter_by(id=subscription_id, user_id=current_user.id).first()
     if not subscription:
         flash('订阅不存在', 'error')
-        return redirect(url_for('profile'))
+        return redirect(url_for('subscriptions'))
     
     try:
         # 更新搜索参数

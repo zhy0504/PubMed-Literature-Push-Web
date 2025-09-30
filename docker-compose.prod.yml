@@ -121,7 +121,7 @@ services:
   scheduler:
     image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
     container_name: pubmed-rq-scheduler-prod
-    command: python rq_scheduler_runner.py
+    command: python /app/rq_scheduler_runner.py
     env_file:
       - .env
     environment:

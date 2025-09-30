@@ -36,9 +36,10 @@ if [ "$DB_VALID" = false ]; then
     python setup.py --default
     if [ $? -eq 0 ]; then
         echo "[完成] 数据库初始化成功"
-        echo "[账号] admin@pubmed.com / admin123"
-        echo "[账号] backup-admin@pubmed.com / admin123"
-        echo "[账号] test@example.com / test123"
+        # 从环境变量读取管理员账号，如果没有则显示默认值
+        ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL:-admin@pubmed.com}
+        ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123}
+        echo "[账号] $ADMIN_EMAIL / $ADMIN_PASSWORD"
     else
         echo "[错误] 数据库初始化失败"
         exit 1

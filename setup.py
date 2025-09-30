@@ -341,6 +341,7 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
             ('push_daily_time', '09:00', '默认每日推送时间', 'push'),
             ('push_max_articles', '50', '每次推送最大文章数', 'push'),
             ('push_enabled', 'true', '启用自动推送', 'push'),
+            ('push_check_frequency', '0.0833', '推送任务检查频率(小时)', 'push'),
             ('system_name', 'PubMed Literature Push', '系统名称', 'system'),
             ('log_retention_days', '30', '日志保留天数', 'system'),
             ('user_registration_enabled', 'true', '允许用户注册', 'system'),
@@ -647,17 +648,20 @@ def display_final_credentials(users, display_passwords=None):
         print(f"显示账号信息失败: {e}")
 
 def setup_default_accounts():
-    """使用默认账号快速设置"""
+    """使用默认账号快速设置 - 从环境变量读取或使用默认值"""
     print("=" * 60)
     print("     PubMed Literature Push - 快速默认设置")
     print("=" * 60)
     print()
+
+    # 从环境变量读取账号配置，如果没有则使用默认值
+    admin_email = os.environ.get('DEFAULT_ADMIN_EMAIL', 'admin@pubmed.com')
+    admin_password = os.environ.get('DEFAULT_ADMIN_PASSWORD', 'admin123')
+
     print("将使用以下默认账号：")
-    print("  主管理员: admin@pubmed.com / admin123")
-    print("  备用管理员: backup-admin@pubmed.com / admin123")
-    print("  普通用户: test@example.com / test123")
+    print(f"  管理员: {admin_email} / {admin_password}")
     print()
-    
+
     # 检查是否已存在数据库
     db_path = get_database_path()
     if db_path.exists():
@@ -667,14 +671,14 @@ def setup_default_accounts():
             print("设置已取消。")
             return 0
         print()
-    
-    # 使用默认账号创建数据库
+
+    # 使用配置的账号创建数据库 - 只创建一个管理员账号
     success, created_users = create_custom_database(
-        'admin@pubmed.com', 'admin123',
-        'test@example.com', 'test123',
-        'backup-admin@pubmed.com', 'admin123'
+        admin_email, admin_password,
+        None, None,  # 不创建普通用户
+        None, None   # 不创建备用管理员
     )
-    
+
     if success:
         print()
         print("=" * 60)
@@ -682,9 +686,7 @@ def setup_default_accounts():
         print("=" * 60)
         print()
         print("可以使用以下账号登录：")
-        print("  主管理员: admin@pubmed.com / admin123")
-        print("  备用管理员: backup-admin@pubmed.com / admin123")
-        print("  普通用户: test@example.com / test123")
+        print(f"  管理员: {admin_email} / {admin_password}")
         print()
         print("=" * 60)
         return 0

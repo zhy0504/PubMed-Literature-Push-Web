@@ -210,7 +210,7 @@ class RQConfig:
     RESULT_TTL = 3600  # 结果保存时间(秒)
     
     # 调度器配置
-    SCHEDULER_INTERVAL = 60  # 调度器检查间隔(秒)
+    SCHEDULER_INTERVAL = 300  # 调度器检查间隔(秒)
     
     @classmethod
     def init_app(cls, app):

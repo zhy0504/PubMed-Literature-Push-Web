@@ -133,7 +133,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       # Scheduler配置
       - RQ_SCHEDULER_NAME=pubmed-scheduler-prod
-      - RQ_SCHEDULER_INTERVAL=10
+      - RQ_SCHEDULER_INTERVAL=300
       # 时区配置
       - TZ=${TZ:-Asia/Shanghai}
       # 日志配置

@@ -1884,23 +1884,21 @@ def init_scheduler():
     """初始化RQ调度器（替代APScheduler）"""
     try:
         print("初始化RQ推送调度器...")
-        
+
         # 检查Redis连接
         redis_conn.ping()
         print("✅ Redis连接正常")
-        
+
         # 启动RQ调度器
         if not rq_scheduler.connection:
             rq_scheduler.connection = redis_conn
-            
+
         print("✅ RQ调度器初始化完成")
-        
-        # 批量调度所有活跃订阅
-        from rq_config import enqueue_job
-        from tasks import batch_schedule_all_subscriptions
-        job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
-        print(f"✅ 批量调度任务已排队: {job.id}")
-        
+
+        # 注意: 批量调度不在这里执行,避免循环导入
+        # 需要手动执行: python /app/init_rq_schedules.py
+        print("💡 提示: 首次部署请执行 python /app/init_rq_schedules.py 进行批量调度")
+
         # 可选：保留APScheduler作为备用调度器（仅用于RQ监控）
         if not scheduler.running:
             # 添加RQ调度器监控任务

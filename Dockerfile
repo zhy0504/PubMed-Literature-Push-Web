@@ -12,13 +12,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DATABASE_URL=sqlite:////app/pubmed_app.db \
     TZ=Asia/Shanghai
 
-# 安装系统依赖
+# 安装系统依赖（包含时区数据）
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     curl \
     sqlite3 \
     redis-tools \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件

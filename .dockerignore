@@ -23,7 +23,6 @@ quick_venv/
 .gitignore
 
 # Docker
-Dockerfile
 .dockerignore
 docker-compose.yml
 docker-compose.override.yml

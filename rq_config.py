@@ -2,6 +2,7 @@
 """
 RQ (Redis Queue) 配置和任务队列管理
 用于替代APScheduler的定时推送功能
+支持RQ Scheduler进行精确的定时任务调度
 """
 
 import os
@@ -9,6 +10,7 @@ import redis
 from rq import Queue, Worker, Connection
 from rq.job import Job
 import datetime
+import logging
 from typing import Optional, List
 
 # Redis连接配置
@@ -20,30 +22,39 @@ high_priority_queue = Queue('high', connection=redis_conn)  # 高优先级：立
 default_queue = Queue('default', connection=redis_conn)     # 默认：定时推送
 low_priority_queue = Queue('low', connection=redis_conn)    # 低优先级：统计分析
 
-# 注意：rq-scheduler需要单独安装和运行
-# 这里使用简化版本的延迟任务调度
-class SimpleScheduler:
-    """简化版RQ调度器"""
-    def __init__(self, connection):
-        self.connection = connection
-        self.scheduled_jobs = []
-    
-    def enqueue_at(self, run_at: datetime.datetime, func, *args, job_id=None, **kwargs):
-        """在指定时间执行任务"""
-        delay = (run_at - datetime.datetime.now()).total_seconds()
-        if delay > 0:
-            queue = get_queue('default')
-            return queue.enqueue_in(int(delay), func, *args, job_id=job_id, **kwargs)
-        else:
-            # 立即执行
-            queue = get_queue('high')
-            return queue.enqueue(func, *args, job_id=job_id, **kwargs)
-    
-    def get_jobs(self):
-        """获取调度任务（简化实现）"""
-        return self.scheduled_jobs
+# 尝试导入RQ Scheduler（如果已安装）
+try:
+    from rq_scheduler import Scheduler
+    USE_RQ_SCHEDULER = True
+    scheduler = Scheduler(connection=redis_conn)
+    logging.info("✅ 使用RQ Scheduler进行任务调度")
+except ImportError:
+    USE_RQ_SCHEDULER = False
+    logging.warning("⚠️ rq-scheduler未安装，使用简化调度器。建议安装: pip install rq-scheduler")
 
-scheduler = SimpleScheduler(redis_conn)
+    # 简化版调度器作为备用
+    class SimpleScheduler:
+        """简化版RQ调度器（备用）"""
+        def __init__(self, connection):
+            self.connection = connection
+            self.scheduled_jobs = []
+
+        def enqueue_at(self, run_at: datetime.datetime, func, *args, job_id=None, **kwargs):
+            """在指定时间执行任务"""
+            delay = (run_at - datetime.datetime.now()).total_seconds()
+            if delay > 0:
+                queue = get_queue('default')
+                return queue.enqueue_in(int(delay), func, *args, job_id=job_id, **kwargs)
+            else:
+                # 立即执行
+                queue = get_queue('high')
+                return queue.enqueue(func, *args, job_id=job_id, **kwargs)
+
+        def get_jobs(self):
+            """获取调度任务（简化实现）"""
+            return self.scheduled_jobs
+
+    scheduler = SimpleScheduler(redis_conn)
 
 def get_redis_connection():
     """获取Redis连接"""
@@ -110,16 +121,19 @@ def get_queue_info():
     return {
         'high': {
             'length': len(high_priority_queue),
+            'deferred': len(high_priority_queue.deferred_job_registry),
             'failed': len(high_priority_queue.failed_job_registry),
             'finished': len(high_priority_queue.finished_job_registry)
         },
         'default': {
             'length': len(default_queue),
+            'deferred': len(default_queue.deferred_job_registry),
             'failed': len(default_queue.failed_job_registry),
             'finished': len(default_queue.finished_job_registry)
         },
         'low': {
             'length': len(low_priority_queue),
+            'deferred': len(low_priority_queue.deferred_job_registry),
             'failed': len(low_priority_queue.failed_job_registry),
             'finished': len(low_priority_queue.finished_job_registry)
         },
@@ -145,6 +159,26 @@ def get_failed_jobs():
             except:
                 continue
     return failed_jobs
+
+def get_deferred_jobs():
+    """获取延迟任务列表"""
+    deferred_jobs = []
+    for queue in [high_priority_queue, default_queue, low_priority_queue]:
+        registry = queue.deferred_job_registry
+        for job_id in registry.get_job_ids():
+            try:
+                job = Job.fetch(job_id, connection=redis_conn)
+                deferred_jobs.append({
+                    'id': job.id,
+                    'queue': queue.name,
+                    'func_name': job.func_name,
+                    'args': job.args,
+                    'created_at': job.created_at.isoformat() if job.created_at else None,
+                    'enqueued_at': job.enqueued_at.isoformat() if job.enqueued_at else None,
+                })
+            except:
+                continue
+    return deferred_jobs
 
 def requeue_failed_job(job_id: str):
     """重新排队失败的任务"""

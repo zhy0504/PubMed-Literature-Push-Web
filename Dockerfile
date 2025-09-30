@@ -39,7 +39,8 @@ RUN mkdir -p /app/data && \
     mkdir -p /app/logs && \
     chmod +x /app/start.sh && \
     chmod +x /app/docker-entrypoint.sh && \
-    chmod +x /app/rq_worker.py
+    chmod +x /app/rq_worker.py && \
+    chmod +x /app/rq_scheduler.py
 
 # 创建非root用户
 RUN adduser --disabled-password --gecos '' appuser && \

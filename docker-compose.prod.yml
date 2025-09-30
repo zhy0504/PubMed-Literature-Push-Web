@@ -69,6 +69,7 @@ services:
       - RQ_QUEUES=high,default,low
       - TZ=${TZ:-Asia/Shanghai}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/rq_worker_1.log
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -98,6 +99,7 @@ services:
       - RQ_QUEUES=high,default,low
       - TZ=${TZ:-Asia/Shanghai}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/rq_worker_2.log
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -105,6 +107,39 @@ services:
       redis:
         condition: service_healthy
       app:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; redis.Redis.from_url('redis://redis:6379/0').ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - pubmed-network
+
+  # RQ Scheduler进程（生产环境）
+  scheduler:
+    image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
+    container_name: pubmed-rq-scheduler-prod
+    command: python rq_scheduler.py
+    env_file:
+      - .env
+    environment:
+      # Redis配置
+      - REDIS_URL=redis://redis:6379/0
+      # Scheduler配置
+      - RQ_SCHEDULER_NAME=pubmed-scheduler-prod
+      - RQ_SCHEDULER_INTERVAL=10
+      # 时区配置
+      - TZ=${TZ:-Asia/Shanghai}
+      # 日志配置
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/rq_scheduler.log
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:

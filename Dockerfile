@@ -40,7 +40,7 @@ RUN mkdir -p /app/data && \
     (test -f /app/start.sh && chmod +x /app/start.sh || true) && \
     (test -f /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh || true) && \
     (test -f /app/rq_worker.py && chmod +x /app/rq_worker.py || true) && \
-    (test -f /app/rq_scheduler.py && chmod +x /app/rq_scheduler.py || true)
+    (test -f /app/rq_scheduler_runner.py && chmod +x /app/rq_scheduler_runner.py || true)
 
 # 创建非root用户
 RUN adduser --disabled-password --gecos '' appuser && \

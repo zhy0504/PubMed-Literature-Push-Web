@@ -89,7 +89,7 @@ services:
   scheduler:
     build: .
     container_name: pubmed-rq-scheduler
-    command: python rq_scheduler.py
+    command: python rq_scheduler_runner.py
     env_file:
       - .env
     environment:

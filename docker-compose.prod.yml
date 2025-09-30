@@ -154,16 +154,16 @@ services:
     networks:
       - pubmed-network
 
-  # RQ Dashboard（生产环境监控）
+  # RQ Dashboard（生产环境监控 - 使用 rq-dashboard-fast）
   rq-dashboard:
-    image: eoranged/rq-dashboard:latest
+    image: hannes221/rq-dashboard-fast:latest
     container_name: pubmed-rq-dashboard-prod
     ports:
-      - "9181:9181"
+      - "9181:8000"
     environment:
-      - RQ_DASHBOARD_REDIS_URL=redis://redis:6379/0
-      - RQ_DASHBOARD_USERNAME=${RQ_DASHBOARD_USER:-admin}
-      - RQ_DASHBOARD_PASSWORD=${RQ_DASHBOARD_PASS:-admin123}
+      - REDIS_URL=redis://redis:6379/0
+      - USERNAME=${RQ_DASHBOARD_USER:-admin}
+      - PASSWORD=${RQ_DASHBOARD_PASS:-admin123}
     depends_on:
       - redis
     restart: unless-stopped

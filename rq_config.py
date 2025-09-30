@@ -101,8 +101,25 @@ def schedule_subscription_push(subscription_id: int, run_at: datetime.datetime):
 
 def cancel_subscription_jobs(subscription_id: int):
     """取消订阅的所有待执行任务"""
-    # 简化实现：遍历队列查找相关任务
+    cancelled_count = 0
+
     try:
+        # 1. 取消RQ Scheduler中的调度任务
+        if USE_RQ_SCHEDULER:
+            try:
+                scheduled_jobs = list(scheduler.get_jobs())
+                for job in scheduled_jobs:
+                    if hasattr(job, 'id') and job.id.startswith(f'push_subscription_{subscription_id}_'):
+                        try:
+                            scheduler.cancel(job)
+                            cancelled_count += 1
+                            logging.info(f"已取消RQ Scheduler任务: {job.id}")
+                        except Exception as e:
+                            logging.warning(f"取消RQ Scheduler任务 {job.id} 失败: {e}")
+            except Exception as e:
+                logging.warning(f"遍历RQ Scheduler任务失败: {e}")
+
+        # 2. 取消队列中的延迟任务
         for queue in [high_priority_queue, default_queue, low_priority_queue]:
             # 获取延迟任务注册表
             registry = queue.deferred_job_registry
@@ -111,10 +128,17 @@ def cancel_subscription_jobs(subscription_id: int):
                     try:
                         job = Job.fetch(job_id, connection=redis_conn)
                         job.cancel()
-                    except:
-                        pass
-    except Exception:
-        pass
+                        cancelled_count += 1
+                        logging.info(f"已取消延迟任务: {job_id}")
+                    except Exception as e:
+                        logging.warning(f"取消延迟任务 {job_id} 失败: {e}")
+
+        logging.info(f"订阅 {subscription_id} 共取消 {cancelled_count} 个任务")
+        return cancelled_count
+
+    except Exception as e:
+        logging.error(f"取消订阅 {subscription_id} 的任务时发生异常: {e}")
+        return cancelled_count
 
 def get_queue_info():
     """获取队列状态信息"""

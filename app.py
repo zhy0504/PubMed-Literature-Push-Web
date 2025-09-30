@@ -6013,9 +6013,18 @@ def subscribe_keyword():
         
         db.session.add(subscription)
         db.session.commit()
+
+        # 调度订阅推送任务
+        try:
+            from tasks import schedule_next_push_for_subscription
+            schedule_next_push_for_subscription(subscription)
+            app.logger.info(f"已为订阅 {subscription.id} 创建RQ调度任务")
+        except Exception as e:
+            app.logger.warning(f"为订阅 {subscription.id} 创建RQ调度任务失败: {e}")
+
         log_activity('INFO', 'subscription', f'用户 {current_user.email} 订阅关键词: {keywords}', current_user.id, request.remote_addr)
         flash(f'成功订阅关键词: {keywords}', 'success')
-    
+
     return redirect(url_for('subscriptions'))
 
 @app.route('/unsubscribe_keyword', methods=['POST'])
@@ -9031,13 +9040,12 @@ def admin_system():
                 SystemSetting.set_setting('push_max_articles', request.form.get('push_max_articles', '50'), '每次推送最大文章数', 'push')
                 SystemSetting.set_setting('push_check_frequency', request.form.get('push_check_frequency', '1'), '定时推送检查频率(小时)', 'push')
                 SystemSetting.set_setting('push_enabled', request.form.get('push_enabled', 'true'), '启用自动推送', 'push')
-                
-                # 重新初始化调度器以应用新的检查频率
-                if scheduler.running:
-                    scheduler.remove_job('push_check')
-                    init_scheduler()
-                    
-                flash('推送配置已保存，调度器已更新', 'admin')
+
+                # RQ调度系统：不需要重新初始化调度器
+                # 订阅任务已通过RQ Scheduler独立调度，无需依赖检查频率
+                app.logger.info(f"推送配置已保存 - 注意：RQ调度模式下，订阅任务独立调度，不受检查频率影响")
+
+                flash('推送配置已保存（RQ调度模式：订阅任务独立调度）', 'admin')
             
             
             # 保存系统配置
@@ -9197,12 +9205,13 @@ def admin_system():
                                         <option value="24" {% if settings.push_check_frequency == '24' %}selected{% endif %}>每24小时检查一次</option>
                                     </select>
                                     <div class="form-text">
-                                        推送时间精度说明：<br>
-                                        • <strong>15分钟检查</strong>：可确保不错过任何推送时间（最精确）<br>
-                                        • <strong>30分钟检查</strong>：可覆盖大部分推送时间<br>  
-                                        • <strong>1小时检查</strong>：每小时整点检查，配合智能补推机制确保不错过<br>
-                                        • <strong>2小时及以上</strong>：按设置间隔检查，配合智能补推机制<br>
-                                        <small class="text-muted">💡 智能补推：即使错过推送时间，系统会在1小时内自动补推</small>
+                                        <div class="alert alert-info mt-2 mb-0">
+                                            <strong>RQ调度模式说明：</strong><br>
+                                            • 当前使用 <strong>RQ Scheduler</strong> 进行精确调度<br>
+                                            • 每个订阅根据其推送时间独立调度<br>
+                                            • 此检查频率设置仅用于兼容性保留，不影响实际调度<br>
+                                            • 推送任务会在设定的准确时间触发
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="mb-3">
@@ -11167,8 +11176,17 @@ def update_subscription(subscription_id):
         
         # 根据新的推送频率更新搜索天数
         subscription.days_back = get_search_days_by_frequency(subscription.push_frequency)
-        
+
         db.session.commit()
+
+        # 重新调度订阅推送任务（更新后的时间设置）
+        try:
+            from tasks import schedule_next_push_for_subscription
+            schedule_next_push_for_subscription(subscription)
+            app.logger.info(f"已为订阅 {subscription.id} 更新RQ调度任务")
+        except Exception as e:
+            app.logger.warning(f"为订阅 {subscription.id} 更新RQ调度任务失败: {e}")
+
         log_activity('INFO', 'subscription', f'用户 {current_user.email} 更新订阅设置: {subscription.keywords}', current_user.id, request.remote_addr)
         flash('订阅设置更新成功！', 'success')
         

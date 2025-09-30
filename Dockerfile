@@ -34,13 +34,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # 复制项目文件
 COPY . .
 
-# 创建必要的目录并设置脚本权限
+# 创建必要的目录并设置脚本权限（忽略不存在的文件）
 RUN mkdir -p /app/data && \
     mkdir -p /app/logs && \
-    chmod +x /app/start.sh && \
-    chmod +x /app/docker-entrypoint.sh && \
-    chmod +x /app/rq_worker.py && \
-    chmod +x /app/rq_scheduler.py
+    (test -f /app/start.sh && chmod +x /app/start.sh || true) && \
+    (test -f /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh || true) && \
+    (test -f /app/rq_worker.py && chmod +x /app/rq_worker.py || true) && \
+    (test -f /app/rq_scheduler.py && chmod +x /app/rq_scheduler.py || true)
 
 # 创建非root用户
 RUN adduser --disabled-password --gecos '' appuser && \

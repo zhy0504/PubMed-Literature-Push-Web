@@ -7,14 +7,25 @@ RQ Worker 启动脚本
 
 import os
 import sys
+import signal
 import logging
 from rq import Worker, Queue, Connection
 from rq_config import redis_conn, high_priority_queue, default_queue, low_priority_queue
+
+# 全局变量用于优雅关闭
+shutdown_requested = False
 
 # 添加当前目录到Python路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
+
+def signal_handler(signum, frame):
+    """处理关闭信号"""
+    global shutdown_requested
+    logger = logging.getLogger(__name__)
+    logger.info(f"收到信号 {signum}，准备优雅关闭...")
+    shutdown_requested = True
 
 def setup_logging():
     """设置日志"""
@@ -30,7 +41,11 @@ def setup_logging():
 def main():
     setup_logging()
     logger = logging.getLogger(__name__)
-    
+
+    # 注册信号处理器
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
     # 获取工作进程参数
     worker_name = os.environ.get('RQ_WORKER_NAME', 'pubmed-worker')
     queues_to_listen = os.environ.get('RQ_QUEUES', 'high,default,low').split(',')
@@ -86,16 +101,25 @@ def main():
         with Connection(redis_conn):
             worker = Worker(queues, name=worker_name)
             logger.info(f"Worker {worker_name} 启动成功")
-            
+
             # 开始工作循环
             worker.work(with_scheduler=True)
-            
+
     except KeyboardInterrupt:
-        logger.info("收到中断信号，正在关闭Worker...")
-        
+        logger.info("收到键盘中断信号，正在关闭Worker...")
+
     except Exception as e:
-        logger.error(f"Worker启动失败: {e}")
-        sys.exit(1)
+        # 区分Redis连接错误和其他错误
+        if "Connection refused" in str(e) or "Connection closed" in str(e):
+            if shutdown_requested:
+                logger.info("检测到优雅关闭信号，正常退出")
+                sys.exit(0)
+            else:
+                logger.error(f"Redis连接失败: {e}")
+                sys.exit(1)
+        else:
+            logger.error(f"Worker启动失败: {e}")
+            sys.exit(1)
 
 if __name__ == '__main__':
     main()

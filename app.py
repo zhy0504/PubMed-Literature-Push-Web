@@ -48,6 +48,255 @@ try:
 except ImportError:
     pass  # python-dotenv 未安装，跳过
 
+# ============================================================================
+# 高级查询构建器
+# ============================================================================
+
+class FilterQueryBuilder:
+    """
+    高级筛选查询构建器
+    支持深层嵌套的 AND/OR 逻辑组合
+    """
+
+    # 预设模板
+    TEMPLATES = {
+        'high_quality': {
+            'name': '高质量期刊',
+            'description': '中科院1区或JCR Q1，且为Top期刊',
+            'icon': '⭐',
+            'filter': {
+                'type': 'group',
+                'operator': 'AND',
+                'children': [
+                    {
+                        'type': 'group',
+                        'operator': 'OR',
+                        'children': [
+                            {'type': 'condition', 'field': 'cas_partition', 'operator': 'in', 'values': ['1']},
+                            {'type': 'condition', 'field': 'jcr_quartile', 'operator': 'in', 'values': ['Q1']}
+                        ]
+                    },
+                    {'type': 'condition', 'field': 'cas_top', 'operator': 'eq', 'value': True}
+                ]
+            }
+        },
+        'medium_quality': {
+            'name': '中等质量期刊',
+            'description': '中科院1-2区或JCR Q1-Q2',
+            'icon': '📚',
+            'filter': {
+                'type': 'group',
+                'operator': 'OR',
+                'children': [
+                    {'type': 'condition', 'field': 'cas_partition', 'operator': 'in', 'values': ['1', '2']},
+                    {'type': 'condition', 'field': 'jcr_quartile', 'operator': 'in', 'values': ['Q1', 'Q2']}
+                ]
+            }
+        },
+        'high_impact': {
+            'name': '高影响因子',
+            'description': '影响因子≥5且为1-2区',
+            'icon': '📈',
+            'filter': {
+                'type': 'group',
+                'operator': 'AND',
+                'children': [
+                    {'type': 'condition', 'field': 'impact_factor', 'operator': 'gte', 'value': 5.0},
+                    {
+                        'type': 'group',
+                        'operator': 'OR',
+                        'children': [
+                            {'type': 'condition', 'field': 'cas_partition', 'operator': 'in', 'values': ['1', '2']},
+                            {'type': 'condition', 'field': 'jcr_quartile', 'operator': 'in', 'values': ['Q1', 'Q2']}
+                        ]
+                    }
+                ]
+            }
+        },
+        'top_journals_only': {
+            'name': '仅Top期刊',
+            'description': '中科院Top期刊，不限分区',
+            'icon': '🏆',
+            'filter': {
+                'type': 'condition',
+                'field': 'cas_top',
+                'operator': 'eq',
+                'value': True
+            }
+        },
+        'basic_quality': {
+            'name': '基础质量筛选',
+            'description': '排除无ISSN，1-3区或Q1-Q3',
+            'icon': '📋',
+            'filter': {
+                'type': 'group',
+                'operator': 'AND',
+                'children': [
+                    {'type': 'condition', 'field': 'exclude_no_issn', 'operator': 'eq', 'value': True},
+                    {
+                        'type': 'group',
+                        'operator': 'OR',
+                        'children': [
+                            {'type': 'condition', 'field': 'cas_partition', 'operator': 'in', 'values': ['1', '2', '3']},
+                            {'type': 'condition', 'field': 'jcr_quartile', 'operator': 'in', 'values': ['Q1', 'Q2', 'Q3']}
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+
+    # 字段定义
+    FIELD_DEFINITIONS = {
+        'cas_partition': {'label': '中科院分区', 'type': 'multi_select', 'options': ['1', '2', '3', '4']},
+        'cas_top': {'label': '中科院Top期刊', 'type': 'boolean'},
+        'jcr_quartile': {'label': 'JCR分区', 'type': 'multi_select', 'options': ['Q1', 'Q2', 'Q3', 'Q4']},
+        'impact_factor': {'label': '影响因子', 'type': 'number'},
+        'exclude_no_issn': {'label': '排除无ISSN', 'type': 'boolean'}
+    }
+
+    def __init__(self, filter_config):
+        """
+        初始化查询构建器
+        Args:
+            filter_config: JSON配置或字典
+        """
+        if isinstance(filter_config, str):
+            self.config = json.loads(filter_config)
+        else:
+            self.config = filter_config
+
+    def evaluate(self, article, quality_info):
+        """
+        评估文章是否满足筛选条件
+        Args:
+            article: 文章字典
+            quality_info: 期刊质量信息字典
+        Returns:
+            bool: 是否通过筛选
+        """
+        if not self.config:
+            return True
+
+        return self._evaluate_node(self.config, article, quality_info)
+
+    def _evaluate_node(self, node, article, quality_info):
+        """递归评估节点"""
+        if node['type'] == 'condition':
+            return self._evaluate_condition(node, article, quality_info)
+        elif node['type'] == 'group':
+            return self._evaluate_group(node, article, quality_info)
+        else:
+            raise ValueError(f"Unknown node type: {node['type']}")
+
+    def _evaluate_group(self, group, article, quality_info):
+        """评估组节点"""
+        operator = group['operator']
+        children = group['children']
+
+        results = [self._evaluate_node(child, article, quality_info) for child in children]
+
+        if operator == 'AND':
+            return all(results)
+        elif operator == 'OR':
+            return any(results)
+        else:
+            raise ValueError(f"Unknown operator: {operator}")
+
+    def _evaluate_condition(self, condition, article, quality_info):
+        """评估条件节点"""
+        field = condition['field']
+        operator = condition['operator']
+
+        # 获取实际值
+        if field == 'cas_partition':
+            actual_value = quality_info.get('zky_category', '')
+        elif field == 'cas_top':
+            actual_value = quality_info.get('zky_top', '') == '是'
+        elif field == 'jcr_quartile':
+            actual_value = quality_info.get('jcr_quartile', '')
+        elif field == 'impact_factor':
+            try:
+                actual_value = float(quality_info.get('jcr_if', 0))
+            except (ValueError, TypeError):
+                actual_value = 0.0
+        elif field == 'exclude_no_issn':
+            has_issn = bool(article.get('issn') or article.get('eissn'))
+            # exclude_no_issn 为 True 时，要求有ISSN
+            if condition.get('value', True):
+                return has_issn
+            else:
+                return True  # 不排除时总是通过
+        else:
+            return True  # 未知字段默认通过
+
+        # 执行比较
+        if operator == 'eq':
+            return actual_value == condition['value']
+        elif operator == 'ne':
+            return actual_value != condition['value']
+        elif operator == 'in':
+            return actual_value in condition.get('values', [])
+        elif operator == 'not_in':
+            return actual_value not in condition.get('values', [])
+        elif operator == 'gte':
+            return actual_value >= condition['value']
+        elif operator == 'lte':
+            return actual_value <= condition['value']
+        elif operator == 'gt':
+            return actual_value > condition['value']
+        elif operator == 'lt':
+            return actual_value < condition['value']
+        elif operator == 'between':
+            min_val, max_val = condition['value']
+            return min_val <= actual_value <= max_val
+        else:
+            return True  # 未知操作符默认通过
+
+    def to_human_readable(self):
+        """转换为人类可读的字符串"""
+        if not self.config:
+            return "无筛选条件"
+        return self._node_to_string(self.config)
+
+    def _node_to_string(self, node, depth=0):
+        """递归转换节点为字符串"""
+        indent = "  " * depth
+
+        if node['type'] == 'condition':
+            return self._condition_to_string(node)
+        elif node['type'] == 'group':
+            operator = " 且 " if node['operator'] == 'AND' else " 或 "
+            children_str = operator.join([
+                f"({self._node_to_string(child, depth + 1)})"
+                for child in node['children']
+            ])
+            return children_str
+        return ""
+
+    def _condition_to_string(self, condition):
+        """条件节点转字符串"""
+        field_def = self.FIELD_DEFINITIONS.get(condition['field'], {})
+        field_label = field_def.get('label', condition['field'])
+        operator = condition['operator']
+
+        if operator == 'in':
+            values = condition.get('values', [])
+            if condition['field'] == 'cas_partition':
+                return f"{field_label}: {' 或 '.join([v+'区' for v in values])}"
+            elif condition['field'] == 'jcr_quartile':
+                return f"{field_label}: {' 或 '.join(values)}"
+        elif operator == 'eq' and condition['field'] == 'cas_top':
+            return "中科院Top期刊"
+        elif operator in ['gte', 'lte', 'gt', 'lt']:
+            op_str = {'gte': '≥', 'lte': '≤', 'gt': '>', 'lt': '<'}[operator]
+            return f"{field_label} {op_str} {condition['value']}"
+        elif operator == 'between':
+            min_val, max_val = condition['value']
+            return f"{field_label}: {min_val} ~ {max_val}"
+
+        return f"{field_label}"
+
 class JournalDataCache:
     """期刊数据缓存单例类，避免重复加载大量数据"""
     
@@ -524,14 +773,18 @@ class Subscription(db.Model):
     
     # 期刊质量筛选参数
     exclude_no_issn = db.Column(db.Boolean, default=True)  # 排除没有ISSN的文献
-    
+
     # JCR筛选参数
     jcr_quartiles = db.Column(db.Text)  # JSON格式存储，如 ["Q1", "Q2"]
     min_impact_factor = db.Column(db.Float)  # 最小影响因子
-    
-    # 中科院筛选参数  
+
+    # 中科院筛选参数
     cas_categories = db.Column(db.Text)  # JSON格式存储，如 ["1", "2"]
     cas_top_only = db.Column(db.Boolean, default=False)  # 只要Top期刊
+
+    # 高级查询构建器配置（新增）
+    filter_config = db.Column(db.Text)  # JSON格式存储查询构建器的完整配置
+    use_advanced_filter = db.Column(db.Boolean, default=False)  # 是否使用高级筛选器
     
     # 推送频率设置
     push_frequency = db.Column(db.String(20), default='daily')  # daily, weekly, monthly
@@ -4993,8 +5246,6 @@ class PubMedAPI:
         Returns:
             dict: 包含筛选前后数量统计的字典
         """
-        # 记录筛选参数
-        app.logger.info(f"[筛选参数] jcr_filter={jcr_filter}, zky_filter={zky_filter}, exclude_no_issn={exclude_no_issn}")
         # 第一步：搜索获取PMID
         pmids = self.search_articles(keywords, max_results, days_back, user_email)
         
@@ -5067,9 +5318,6 @@ class PubMedAPI:
             if zky_filter:
                 zky_category = quality_info.get('zky_category', '')
                 zky_top = quality_info.get('zky_top', '')
-
-                # 调试：记录每篇文章的筛选情况
-                app.logger.debug(f"[中科院筛选] 文章PMID={article.get('pmid', 'N/A')}, 分区={zky_category}, Top={zky_top}, 筛选条件={zky_filter}")
 
                 if 'category' in zky_filter:
                     if not zky_category or zky_category not in zky_filter['category']:
@@ -5643,20 +5891,64 @@ def get_index_template():
                                 <!-- 高级搜索选项已由系统设置控制 -->
                                 
                                 <hr>
-                                
+
                                 <!-- 期刊质量筛选 -->
                                 <h6><i class="fas fa-filter"></i> 期刊质量筛选</h6>
-                                
+
+                                <!-- 预设模板 -->
+                                <div class="mb-3">
+                                    <label class="form-label">快速选择模板</label>
+                                    <div class="d-grid gap-2">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary text-start" onclick="applyTemplate('high_quality')">
+                                            <span class="badge bg-warning text-dark me-2">⭐</span>
+                                            <strong>高质量期刊</strong>
+                                            <br><small class="text-muted ms-4">中科院1区或JCR Q1，且为Top期刊</small>
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary text-start" onclick="applyTemplate('medium_quality')">
+                                            <span class="badge bg-info text-dark me-2">📚</span>
+                                            <strong>中等质量期刊</strong>
+                                            <br><small class="text-muted ms-4">中科院1-2区或JCR Q1-Q2</small>
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary text-start" onclick="applyTemplate('high_impact')">
+                                            <span class="badge bg-success me-2">📈</span>
+                                            <strong>高影响因子</strong>
+                                            <br><small class="text-muted ms-4">影响因子≥5且为1-2区</small>
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary text-start" onclick="applyTemplate('top_journals_only')">
+                                            <span class="badge bg-danger me-2">🏆</span>
+                                            <strong>仅Top期刊</strong>
+                                            <br><small class="text-muted ms-4">中科院Top期刊，不限分区</small>
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary text-start" onclick="applyTemplate('basic_quality')">
+                                            <span class="badge bg-secondary me-2">📋</span>
+                                            <strong>基础质量筛选</strong>
+                                            <br><small class="text-muted ms-4">排除无ISSN，1-3区或Q1-Q3</small>
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="clearAllFilters()">
+                                            <i class="fas fa-times"></i> 清除所有筛选
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="alert alert-info py-2 px-3 mb-3" style="font-size: 0.875rem;">
+                                    <i class="fas fa-info-circle"></i> <strong>提示：</strong><br>
+                                    • 点击模板快速应用，也可手动调整下方条件<br>
+                                    • 同类分区多选为"或"关系，不同条件为"且"关系
+                                </div>
+
+                                <input type="hidden" name="use_advanced_filter" id="use_advanced_filter" value="false">
+                                <input type="hidden" name="filter_config" id="filter_config_input">
+
                                 <div class="mb-3">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="exclude_no_issn" checked>
                                         <label class="form-check-label">排除无ISSN信息的文献</label>
                                     </div>
                                 </div>
-                                
+
                                 <!-- JCR筛选 -->
                                 <div class="mb-3">
-                                    <label class="form-label">JCR分区筛选</label>
+                                    <label class="form-label">JCR分区筛选 <small class="text-muted">(多选为"或"关系)</small></label>
                                     <div class="row">
                                         {% for quartile in ['Q1', 'Q2', 'Q3', 'Q4'] %}
                                         <div class="col-6">
@@ -5668,16 +5960,16 @@ def get_index_template():
                                         {% endfor %}
                                     </div>
                                 </div>
-                                
+
                                 <div class="mb-3">
-                                    <label class="form-label">最小影响因子</label>
-                                    <input type="number" class="form-control" name="min_if" step="0.1" 
+                                    <label class="form-label">最小影响因子 <small class="text-muted">(与其他条件为"且"关系)</small></label>
+                                    <input type="number" class="form-control" name="min_if" step="0.1"
                                            placeholder="如 1.5">
                                 </div>
-                                
+
                                 <!-- 中科院筛选 -->
                                 <div class="mb-3">
-                                    <label class="form-label">中科院分区筛选</label>
+                                    <label class="form-label">中科院分区筛选 <small class="text-muted">(多选为"或"关系)</small></label>
                                     <div class="row">
                                         {% for category in ['1', '2', '3', '4'] %}
                                         <div class="col-6">
@@ -5689,15 +5981,14 @@ def get_index_template():
                                         {% endfor %}
                                     </div>
                                 </div>
-                                
+
                                 <div class="mb-3">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="zky_top_only">
-                                        <label class="form-check-label">只显示Top期刊</label>
+                                        <label class="form-check-label">只显示Top期刊 <small class="text-muted">(与其他条件为"且"关系)</small></label>
                                     </div>
                                 </div>
-                                
-                                
+
                                 <button type="submit" class="btn btn-primary w-100" onclick="disableSearchButton(this)">
                                     <i class="fas fa-search"></i> 搜索文献
                                 </button>
@@ -6082,6 +6373,112 @@ def get_index_template():
             }, 500);
         });
         {% endif %}
+
+        // ========== 预设模板功能 ==========
+        const FILTER_TEMPLATES = {
+            'high_quality': {
+                cas_partition: ['1'],
+                jcr_quartile: ['Q1'],
+                cas_top: true,
+                exclude_no_issn: true
+            },
+            'medium_quality': {
+                cas_partition: ['1', '2'],
+                jcr_quartile: ['Q1', 'Q2'],
+                exclude_no_issn: true
+            },
+            'high_impact': {
+                cas_partition: ['1', '2'],
+                jcr_quartile: ['Q1', 'Q2'],
+                min_if: 5.0,
+                exclude_no_issn: true
+            },
+            'top_journals_only': {
+                cas_top: true,
+                exclude_no_issn: true
+            },
+            'basic_quality': {
+                cas_partition: ['1', '2', '3'],
+                jcr_quartile: ['Q1', 'Q2', 'Q3'],
+                exclude_no_issn: true
+            }
+        };
+
+        function applyTemplate(templateName) {
+            const template = FILTER_TEMPLATES[templateName];
+            if (!template) return;
+
+            const form = document.getElementById('searchForm');
+
+            // 先清除所有筛选
+            clearAllFilters();
+
+            // 应用模板配置
+            if (template.exclude_no_issn !== undefined) {
+                const checkbox = form.querySelector('input[name="exclude_no_issn"]');
+                if (checkbox) checkbox.checked = template.exclude_no_issn;
+            }
+
+            if (template.jcr_quartile) {
+                template.jcr_quartile.forEach(quartile => {
+                    const checkbox = form.querySelector(`input[name="jcr_quartile"][value="${quartile}"]`);
+                    if (checkbox) checkbox.checked = true;
+                });
+            }
+
+            if (template.min_if !== undefined) {
+                const input = form.querySelector('input[name="min_if"]');
+                if (input) input.value = template.min_if;
+            }
+
+            if (template.cas_partition) {
+                template.cas_partition.forEach(category => {
+                    const checkbox = form.querySelector(`input[name="zky_category"][value="${category}"]`);
+                    if (checkbox) checkbox.checked = true;
+                });
+            }
+
+            if (template.cas_top !== undefined) {
+                const checkbox = form.querySelector('input[name="zky_top_only"]');
+                if (checkbox) checkbox.checked = template.cas_top;
+            }
+
+            // 视觉反馈
+            showToast('已应用模板配置');
+        }
+
+        function clearAllFilters() {
+            const form = document.getElementById('searchForm');
+
+            // 清除所有checkbox（除了关键词输入框）
+            form.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                if (cb.name !== 'exclude_no_issn') {
+                    cb.checked = false;
+                } else {
+                    cb.checked = true; // 默认排除无ISSN
+                }
+            });
+
+            // 清除影响因子
+            const minIfInput = form.querySelector('input[name="min_if"]');
+            if (minIfInput) minIfInput.value = '';
+
+            showToast('已清除所有筛选条件');
+        }
+
+        function showToast(message) {
+            // 简单的Toast提示
+            const toast = document.createElement('div');
+            toast.className = 'alert alert-success alert-dismissible fade show position-fixed';
+            toast.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 250px;';
+            toast.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
         </script>
         <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
     </body>

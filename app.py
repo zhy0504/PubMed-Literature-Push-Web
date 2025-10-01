@@ -5029,28 +5029,30 @@ class PubMedAPI:
         for article in articles:
             # 检查是否有ISSN信息
             has_issn = bool(article.get('issn') or article.get('eissn'))
-            
+
             if exclude_no_issn and not has_issn:
                 excluded_no_issn += 1
                 continue
-            
+
             # 如果没有ISSN但不排除，则计入筛选结果但不应用期刊筛选
             if not has_issn:
                 filtered_count += 1
                 continue
-                
-            # 应用JCR筛选
-            if jcr_filter:
-                # 获取期刊质量信息
+
+            # 获取期刊质量信息(如果需要筛选)
+            quality_info = None
+            if jcr_filter or zky_filter:
                 issn = article.get('issn', '')
                 eissn = article.get('eissn', '')
                 quality_info = self.get_journal_quality(issn, eissn)
-                
+
+            # 应用JCR筛选
+            if jcr_filter:
                 jcr_quartile = quality_info.get('jcr_quartile', '')
                 if 'quartile' in jcr_filter:
                     if not jcr_quartile or jcr_quartile not in jcr_filter['quartile']:
                         continue
-                
+
                 if 'min_if' in jcr_filter:
                     jcr_if = quality_info.get('jcr_if', '')
                     try:
@@ -5059,29 +5061,26 @@ class PubMedAPI:
                             continue
                     except (ValueError, TypeError):
                         continue
-            
+
             # 应用中科院筛选
             if zky_filter:
-                # 如果还没获取质量信息，现在获取
-                if 'quality_info' not in locals():
-                    issn = article.get('issn', '')
-                    eissn = article.get('eissn', '')
-                    quality_info = self.get_journal_quality(issn, eissn)
-                
                 zky_category = quality_info.get('zky_category', '')
                 zky_top = quality_info.get('zky_top', '')
-                
+
+                # 调试日志
+                app.logger.debug(f"[中科院筛选] 文章分区={zky_category}, 筛选条件={zky_filter.get('category')}")
+
                 if 'category' in zky_filter:
                     if not zky_category or zky_category not in zky_filter['category']:
                         continue
-                
+
                 if 'top' in zky_filter:
                     is_top = zky_top == '是'
                     if zky_filter['top'] and not is_top:
                         continue
                     if not zky_filter['top'] and is_top:
                         continue
-            
+
             filtered_count += 1
         
         return {

@@ -97,6 +97,41 @@ PubMed Literature Push Web 是一个智能的 PubMed 文献推送系统，支持
    - 检索式生成：将自然语言需求转为 PubMed 检索式
    - 摘要翻译：输出中文摘要或要点
 
+### 时区配置
+从版本 v2.1.0 开始支持灵活的时区配置，不再强制使用北京时间。
+
+**配置方法**：
+1. 在 `.env` 文件中设置：
+   ```bash
+   TZ=Asia/Shanghai    # 北京时间
+   ```
+2. Docker 环境中设置：
+   ```yaml
+   services:
+     app:
+       environment:
+         - TZ=Asia/Shanghai
+   ```
+
+**常用时区示例**：
+- `Asia/Shanghai` - 北京时间（UTC+8）
+- `Asia/Tokyo` - 东京时间（UTC+9）
+- `America/New_York` - 纽约时间（UTC-5/-4）
+- `Europe/London` - 伦敦时间（UTC+0/+1）
+- `UTC` - 协调世界时（UTC+0）
+
+完整时区列表参考：https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+
+**影响范围**：
+- 定时推送：推送时间基于配置时区执行
+- 日志时间戳：所有日志记录使用配置时区
+- 管理界面：显示时间使用配置时区
+
+**注意事项**：
+- 未配置时默认使用 `Asia/Shanghai`
+- 修改时区后需重启容器生效
+- 使用标准 IANA 时区标识符（避免使用 EST、PST 等缩写）
+
 ### 期刊数据
 - `data/jcr_filtered.csv`：JCR 影响因子与分区
 - `data/zky_filtered.csv`：中科院分区数据

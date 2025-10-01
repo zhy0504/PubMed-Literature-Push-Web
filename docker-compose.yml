@@ -87,9 +87,9 @@ services:
       timeout: 10s
       retries: 3
 
-  # RQ Dashboard (可选) - 使用 rq-dashboard-fast
+  # RQ Dashboard (可选) - 使用更新的镜像
   rq-dashboard:
-    image: hannes221/rq-dashboard-fast:latest
+    image: cjlapao/rq-dashboard:latest
     container_name: pubmed-rq-dashboard
     ports:
       - "9181:8000"

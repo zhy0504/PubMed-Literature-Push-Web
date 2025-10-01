@@ -120,9 +120,9 @@ services:
     networks:
       - pubmed-network
 
-  # RQ Dashboard（生产环境监控 - 使用 rq-dashboard-fast）
+  # RQ Dashboard（生产环境监控 - 使用更新的镜像）
   rq-dashboard:
-    image: hannes221/rq-dashboard-fast:latest
+    image: cjlapao/rq-dashboard:latest
     container_name: pubmed-rq-dashboard-prod
     ports:
       - "9181:8000"

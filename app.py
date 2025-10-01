@@ -1641,13 +1641,23 @@ class SimpleLiteraturePushService:
             title = getattr(article, 'title', '未知标题')
             brief_intro = getattr(article, 'brief_intro', '')
             if brief_intro:
-                # 为简介添加锚点链接，链接到对应的详细文章
-                brief_intros.append(f'<a href="#article-{i}" style="color: #495057; text-decoration: none; display: block; padding: 8px 0; border-bottom: 1px solid #ffeaa7; transition: all 0.3s;" onmouseover="this.style.backgroundColor=\'#fff9e6\'; this.style.paddingLeft=\'10px\';" onmouseout="this.style.backgroundColor=\'transparent\'; this.style.paddingLeft=\'0\';">{i}、{title}：{brief_intro}</a>')
+                # 使用醒目的编号样式，不使用href链接（避免邮件客户端转换）
+                brief_intros.append(f'''
+                    <div style="padding: 12px 0; border-bottom: 1px solid #ffeaa7;">
+                        <div style="margin-bottom: 8px;">
+                            <span style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; padding: 4px 12px; border-radius: 6px; margin-right: 10px; font-size: 14px; min-width: 30px; text-align: center;">第{i}篇</span>
+                            <span style="color: #2c3e50; font-size: 14px; font-weight: 600;">{title}</span>
+                        </div>
+                        <div style="color: #495057; font-size: 15px; line-height: 1.6; margin-left: 0px; padding-left: 0px;">
+                            {brief_intro}
+                        </div>
+                    </div>
+                ''')
 
         if brief_intros:
             html_content += f"""
                     <div class="brief-summary">
-                        <div class="summary-title">📋 今日推送文献简介</div>
+                        <div class="summary-title">📋 文献速览（按序号查看下方详情）</div>
                         <div class="summary-content">
                             {''.join(brief_intros)}
                         </div>
@@ -1697,18 +1707,18 @@ class SimpleLiteraturePushService:
                 if hasattr(article, 'abstract_translation') and article.abstract_translation:
                     abstract_html += f'''
                         <div class="abstract-section">
-                            <div class="abstract-title">🇨🇳 中文摘要</div>
+                            <div class="abstract-title">📝 中文摘要</div>
                             <div class="abstract-content chinese-abstract">{article.abstract_translation}</div>
                         </div>
                     '''
                 
             
             # 获取发表日期
-            pub_date = ""
+            pub_date_html = ""
             if hasattr(article, 'publish_date') and article.publish_date:
-                pub_date = f" • {article.publish_date.strftime('%Y-%m-%d')}"
+                pub_date_html = f'<div style="color: #6c757d; font-size: 13px; margin-top: 5px;">📅 发表日期: {article.publish_date.strftime("%Y-%m-%d")}</div>'
             elif hasattr(article, 'pub_date') and article.pub_date:
-                pub_date = f" • {article.pub_date}"
+                pub_date_html = f'<div style="color: #6c757d; font-size: 13px; margin-top: 5px;">📅 发表日期: {article.pub_date}</div>'
             
             # 构建ISSN信息
             issn_info = ""
@@ -1727,7 +1737,7 @@ class SimpleLiteraturePushService:
             html_content += f"""
                     <div class="article" id="article-{i}">
                         <div class="article-header">
-                            <div class="article-number">{i}</div>
+                            <div class="article-number">第{i}篇</div>
                             <h3 class="title">
                                 <a href="{getattr(article, 'pubmed_url', '#')}" target="_blank">
                                     {getattr(article, 'title', '未知标题')}
@@ -1737,8 +1747,9 @@ class SimpleLiteraturePushService:
 
                         <div class="journal-info">
                             <div class="journal-name">
-                                📖 {getattr(article, 'journal', '未知期刊')}{pub_date}
+                                📖 {getattr(article, 'journal', '未知期刊')}
                             </div>
+                            {pub_date_html}
                             {issn_info}
                             {quality_html}
                         </div>

@@ -4976,11 +4976,11 @@ class PubMedAPI:
 
         return filtered_articles
     
-    def search_and_count_with_filter(self, keywords, max_results=5000, days_back=30, 
+    def search_and_count_with_filter(self, keywords, max_results=5000, days_back=30,
                                    jcr_filter=None, zky_filter=None, exclude_no_issn=True, user_email=None):
         """
         搜索并统计文献数量，支持期刊质量筛选，只返回统计结果不获取详细信息
-        
+
         Args:
             keywords: 关键词
             max_results: 最大搜索结果数
@@ -4989,10 +4989,12 @@ class PubMedAPI:
             zky_filter: 中科院筛选条件，如 {'category': ['1', '2'], 'top': True}
             exclude_no_issn: 是否排除没有ISSN的文献
             user_email: 用户邮箱，用于PubMed API请求标识
-        
+
         Returns:
             dict: 包含筛选前后数量统计的字典
         """
+        # 记录筛选参数
+        app.logger.info(f"[筛选参数] jcr_filter={jcr_filter}, zky_filter={zky_filter}, exclude_no_issn={exclude_no_issn}")
         # 第一步：搜索获取PMID
         pmids = self.search_articles(keywords, max_results, days_back, user_email)
         
@@ -5065,6 +5067,9 @@ class PubMedAPI:
             if zky_filter:
                 zky_category = quality_info.get('zky_category', '')
                 zky_top = quality_info.get('zky_top', '')
+
+                # 调试：记录每篇文章的筛选情况
+                app.logger.debug(f"[中科院筛选] 文章PMID={article.get('pmid', 'N/A')}, 分区={zky_category}, Top={zky_top}, 筛选条件={zky_filter}")
 
                 if 'category' in zky_filter:
                     if not zky_category or zky_category not in zky_filter['category']:

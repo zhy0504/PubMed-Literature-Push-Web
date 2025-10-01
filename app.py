@@ -5205,13 +5205,16 @@ def before_request_sync():
     try:
         # 尝试创建锁文件(原子操作)
         import fcntl
+        print(f"[Worker {os.getpid()}] [同步] 尝试获取同步锁...")
         lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        print(f"[Worker {os.getpid()}] [同步] 成功获取同步锁")
 
         # 获得锁后再次检查(双重检查锁定模式)
         if os.path.exists(sync_flag_file):
             try:
                 file_mtime = os.path.getmtime(sync_flag_file)
                 if time.time() - file_mtime < 3600:
+                    print(f"[Worker {os.getpid()}] [同步] 标记文件已存在，跳过同步")
                     return
             except:
                 pass
@@ -5229,17 +5232,21 @@ def before_request_sync():
 
     except FileExistsError:
         # 其他Worker正在执行同步,等待完成
+        print(f"[Worker {os.getpid()}] [同步] 锁文件已存在，等待其他Worker完成...")
         max_wait = 10  # 最多等待10秒
         waited = 0
         while waited < max_wait:
             if os.path.exists(sync_flag_file):
                 # 同步已完成
+                print(f"[Worker {os.getpid()}] [同步] 检测到同步已完成，跳过")
                 return
             time.sleep(0.1)
             waited += 0.1
+        print(f"[Worker {os.getpid()}] [同步] 等待超时，但标记文件仍不存在")
 
     except Exception as e:
         # 如果文件锁不可用,降级为进程级别的检查
+        print(f"[Worker {os.getpid()}] [同步] 文件锁异常: {e}，使用降级方案")
         global _sync_done
         if not _sync_done:
             sync_env_to_database()
@@ -5250,6 +5257,7 @@ def before_request_sync():
             try:
                 os.close(lock_fd)
                 os.remove(lock_file)
+                print(f"[Worker {os.getpid()}] [同步] 已释放同步锁")
             except:
                 pass
 

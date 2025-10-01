@@ -209,11 +209,14 @@ python app.py
 
 执行 `python setup.py --default` 后会生成以下账号：
 
-| 角色 | 邮箱 | 密码 |
-|------|------|------|
-| 主管理员 | `admin@pubmed.com` | `admin123` |
-| 备用管理员 | `backup-admin@pubmed.com` | `admin123` |
-| 测试用户 | `test@example.com` | `test123` |
+| 角色 | 邮箱 | 密码 | 说明 |
+|------|------|------|------|
+| 管理员 | `admin@pubmed.com` | `admin123` | 可通过环境变量 `DEFAULT_ADMIN_EMAIL` 和 `DEFAULT_ADMIN_PASSWORD` 自定义 |
+
+**安全提示**：
+- ⚠️ 首次登录后请立即修改默认密码
+- 生产环境部署前务必设置强密码
+- 可在后台管理页面创建更多用户账号
 
 ---
 
@@ -519,7 +522,7 @@ docker-compose -f docker-compose.prod.yml logs -f worker-1
 
 - **主应用**: http://localhost:5005
 - **RQ Dashboard**: http://localhost:9181 (监控任务队列)
-- **默认管理员账号**: `admin@pubmed.com` / `admin123`
+- **默认管理员**: `admin@pubmed.com` / `admin123` （⚠️ 请立即修改密码）
 
 #### 5. 常用管理命令
 

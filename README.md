@@ -310,32 +310,23 @@ del pubmed_app.db  # Windows
 python setup.py --default
 ```
 
-### 切换数据库
+### 数据库说明
 
-如需切换到 PostgreSQL 或 MySQL，请按以下步骤操作：
+**当前数据库支持**：项目目前仅支持 SQLite 数据库。
 
-**1. 安装对应的数据库驱动**
-```bash
-# PostgreSQL
-pip install psycopg2-binary
+**技术限制**：
+- `setup.py` 使用 `sqlite3` 模块和原生 SQL 创建表，硬编码 SQLite 语法
+- `docker-entrypoint.sh` 使用 `sqlite3` 命令验证数据库完整性
+- 虽然应用层使用 SQLAlchemy ORM，但初始化脚本未使用 `db.create_all()`
 
-# MySQL
-pip install pymysql
-```
+**如需支持 PostgreSQL/MySQL**：
+需要重构以下组件：
+1. 重写 `setup.py`：使用 SQLAlchemy 的 `db.create_all()` 替代原生 SQL
+2. 修改 `docker-entrypoint.sh`：移除 SQLite 特定的验证逻辑
+3. 更新 Docker Compose 配置：添加 PostgreSQL/MySQL 服务
+4. 测试所有数据库操作的兼容性
 
-**2. 修改 `app.py` 中的数据库连接字符串**
-```python
-# PostgreSQL 示例
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://user:password@localhost/dbname'
-
-# MySQL 示例
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://user:password@localhost/dbname'
-```
-
-**3. 重新初始化数据库**
-```bash
-python setup.py --default
-```
+**建议**：SQLite 对于中小规模部署已足够使用。如有大规模并发需求，建议提交 Issue 讨论迁移方案。
 
 ---
 

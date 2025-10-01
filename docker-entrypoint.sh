@@ -64,10 +64,11 @@ if [ "$RQ_MODE" = "enabled" ]; then
     echo "[RQ] Redis队列模式已启用"
     echo "[RQ] Worker配置: ${RQ_WORKER_NAME:-default-worker}"
     echo "[RQ] 监听队列: ${RQ_QUEUES:-high,default,low}"
-    
+
     # 测试RQ配置
     if python -c "from rq_config import redis_conn; redis_conn.ping(); print('[RQ] 配置测试通过')" 2>/dev/null; then
         echo "[RQ] RQ配置验证成功"
+        echo "[RQ] 已有订阅将在首次请求时自动调度到队列"
     else
         echo "[警告] RQ配置验证失败，但将继续启动"
     fi

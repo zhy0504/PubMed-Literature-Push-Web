@@ -1641,14 +1641,15 @@ class SimpleLiteraturePushService:
             title = getattr(article, 'title', '未知标题')
             brief_intro = getattr(article, 'brief_intro', '')
             if brief_intro:
-                brief_intros.append(f"{i}、{title}：{brief_intro}")
-        
+                # 为简介添加锚点链接，链接到对应的详细文章
+                brief_intros.append(f'<a href="#article-{i}" style="color: #495057; text-decoration: none; display: block; padding: 8px 0; border-bottom: 1px solid #ffeaa7; transition: all 0.3s;" onmouseover="this.style.backgroundColor=\'#fff9e6\'; this.style.paddingLeft=\'10px\';" onmouseout="this.style.backgroundColor=\'transparent\'; this.style.paddingLeft=\'0\';">{i}、{title}：{brief_intro}</a>')
+
         if brief_intros:
             html_content += f"""
                     <div class="brief-summary">
                         <div class="summary-title">📋 今日推送文献简介</div>
                         <div class="summary-content">
-                            {'<br>'.join(brief_intros)}
+                            {''.join(brief_intros)}
                         </div>
                     </div>
             """
@@ -1724,7 +1725,7 @@ class SimpleLiteraturePushService:
                 issn_info = f'<div style="color: #6c757d; font-size: 13px; margin-top: 5px;">📝 {" • ".join(issn_parts)}</div>'
             
             html_content += f"""
-                    <div class="article">
+                    <div class="article" id="article-{i}">
                         <div class="article-header">
                             <div class="article-number">{i}</div>
                             <h3 class="title">
@@ -1733,7 +1734,7 @@ class SimpleLiteraturePushService:
                                 </a>
                             </h3>
                         </div>
-                        
+
                         <div class="journal-info">
                             <div class="journal-name">
                                 📖 {getattr(article, 'journal', '未知期刊')}{pub_date}
@@ -1741,7 +1742,7 @@ class SimpleLiteraturePushService:
                             {issn_info}
                             {quality_html}
                         </div>
-                        
+
                         {abstract_html}
                     </div>
             """
@@ -5182,13 +5183,47 @@ def before_request_sync():
 def initialize_scheduler_safely():
     """安全初始化调度器，避免重复初始化"""
     init_flag_file = '/app/data/scheduler_init_done'
-    
+    rq_schedule_flag_file = '/app/data/rq_schedule_init_done'
+
     try:
         # 检查是否已经初始化
         if scheduler.running:
             print(f"调度器已在PID {os.getpid()}中运行")
+            # 即使调度器已运行，也检查是否需要批量调度订阅
+            try:
+                # 检查数据库是否存在（从配置中获取路径）
+                db_uri = app.config.get('SQLALCHEMY_DATABASE_URI', '')
+                if db_uri.startswith('sqlite:///'):
+                    db_path = db_uri.replace('sqlite:///', '')
+                    if not os.path.exists(db_path):
+                        print("[RQ] 数据库不存在，跳过批量调度")
+                        return
+
+                # 检查是否已经调度过
+                if not os.path.exists(rq_schedule_flag_file):
+                    print("[RQ] 检测到需要初始化订阅调度...")
+
+                    # 检查是否有活跃订阅
+                    subscription_count = Subscription.query.filter_by(is_active=True).count()
+                    if subscription_count == 0:
+                        print("[RQ] 没有活跃订阅，跳过批量调度")
+                        # 创建标记文件以避免重复检查
+                        with open(rq_schedule_flag_file, 'w') as f:
+                            f.write(str(os.getpid()))
+                        return
+
+                    from rq_config import enqueue_job
+                    from tasks import batch_schedule_all_subscriptions
+                    job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
+                    print(f"[RQ] 批量调度任务已排队: {job.id}")
+                    print(f"[RQ] 将调度 {subscription_count} 个活跃订阅到队列")
+                    # 创建标记文件
+                    with open(rq_schedule_flag_file, 'w') as f:
+                        f.write(str(os.getpid()))
+            except Exception as e:
+                print(f"[RQ] 批量调度订阅失败: {e}")
             return
-            
+
         if os.path.exists(init_flag_file):
             try:
                 with open(init_flag_file, 'r') as f:
@@ -5200,17 +5235,61 @@ def initialize_scheduler_safely():
             except (OSError, ValueError):
                 # 进程不存在，删除标记文件
                 os.remove(init_flag_file)
-        
+
         # 初始化调度器
         print(f"进程 {os.getpid()} 开始初始化调度器...")
         init_scheduler()
-        
+
         # 创建成功标记
         if scheduler.running:
             with open(init_flag_file, 'w') as f:
                 f.write(str(os.getpid()))
             print(f"调度器初始化成功 (PID: {os.getpid()})")
-        
+
+            # 批量调度所有已有订阅到RQ队列（容器重启后自动恢复）
+            try:
+                # 检查数据库是否存在（避免初次使用时出错）
+                db_uri = app.config.get('SQLALCHEMY_DATABASE_URI', '')
+                if db_uri.startswith('sqlite:///'):
+                    db_path = db_uri.replace('sqlite:///', '')
+                    if not os.path.exists(db_path):
+                        print("[RQ] 数据库不存在，跳过批量调度")
+                        return
+
+                # 检查是否使用RQ模式且Redis可用
+                rq_mode = os.environ.get('RQ_MODE', 'enabled')
+                if rq_mode == 'enabled':
+                    print("[RQ] 开始批量调度已有订阅...")
+                    from rq_config import redis_conn, enqueue_job
+                    from tasks import batch_schedule_all_subscriptions
+
+                    # 测试Redis连接
+                    redis_conn.ping()
+
+                    # 检查是否有订阅需要调度
+                    subscription_count = Subscription.query.filter_by(is_active=True).count()
+                    if subscription_count == 0:
+                        print("[RQ] 没有活跃订阅，跳过批量调度")
+                        # 创建标记文件以避免重复检查
+                        with open(rq_schedule_flag_file, 'w') as f:
+                            f.write(str(os.getpid()))
+                        return
+
+                    # 提交批量调度任务（高优先级）
+                    job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
+                    print(f"[RQ] 批量调度任务已排队: {job.id}")
+                    print(f"[RQ] 将调度 {subscription_count} 个活跃订阅到队列")
+
+                    # 创建RQ调度标记
+                    with open(rq_schedule_flag_file, 'w') as f:
+                        f.write(str(os.getpid()))
+                else:
+                    print("[调度器] APScheduler降级模式，不需要批量调度")
+            except Exception as e:
+                print(f"[RQ] 批量调度订阅失败（非致命错误）: {e}")
+                import traceback
+                traceback.print_exc()
+
     except Exception as e:
         print(f"调度器初始化失败: {e}")
         if os.path.exists(init_flag_file):

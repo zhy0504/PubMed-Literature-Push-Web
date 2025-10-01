@@ -148,8 +148,12 @@ def main():
                             # 动态获取最新间隔
                             self.interval = self.interval_getter()
 
+                        # 将到期任务移入队列
                         self.enqueue_jobs()
-                        self.clean_registries()
+
+                        # 兼容性处理：部分版本有clean_registries方法
+                        if hasattr(self, 'clean_registries'):
+                            self.clean_registries()
 
                         if burst:
                             break

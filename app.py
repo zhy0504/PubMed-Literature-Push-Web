@@ -30,6 +30,8 @@ import atexit
 import signal
 # RQ相关导入
 from rq_config import RQConfig, get_queue_info, get_failed_jobs, redis_conn
+# 搜索缓存服务导入
+from search_cache_service import search_cache_service
 # 延迟导入 tasks 避免循环导入
 # from tasks import batch_schedule_all_subscriptions, immediate_push_subscription
 import os
@@ -4772,11 +4774,16 @@ class PubMedAPI:
         
         return articles
     
-    def search_and_fetch_with_filter(self, keywords, max_results=20, days_back=30, 
+    def search_and_fetch_with_filter(self, keywords, max_results=20, days_back=30,
                                    jcr_filter=None, zky_filter=None, exclude_no_issn=True, user_email=None):
         """
         搜索并获取文章详细信息，支持期刊质量筛选
-        
+
+        集成缓存优化:
+        - 优先从缓存获取搜索结果
+        - 缓存未命中时调用PubMed API
+        - 自动缓存新搜索结果
+
         Args:
             keywords: 关键词
             max_results: 最大结果数
@@ -4785,48 +4792,132 @@ class PubMedAPI:
             zky_filter: 中科院筛选条件，如 {'category': ['1', '2'], 'top': True}
             exclude_no_issn: 是否排除没有ISSN的文献
             user_email: 用户邮箱，用于PubMed API请求标识
-        
+
         Returns:
             dict: 包含筛选前后数量和文章列表的字典
         """
+        # 构建筛选参数字典(用于缓存键生成)
+        filter_params = {
+            'days_back': days_back,
+            'max_results': max_results,
+            'jcr_filter': jcr_filter,
+            'zky_filter': zky_filter,
+            'exclude_no_issn': exclude_no_issn
+        }
+
+        # 尝试从缓存获取
+        cached_data = search_cache_service.get_cached_results(keywords, filter_params)
+
+        if cached_data:
+            # 缓存命中
+            pmids = cached_data.get('pmids', [])
+            articles = cached_data.get('articles', [])
+
+            # 如果是宽松匹配,需要二次筛选
+            if cached_data.get('requires_filtering', False):
+                app.logger.info(f"[缓存-宽松匹配] 对 {len(articles)} 篇文章进行二次筛选")
+                filtered_articles = self._apply_filters(
+                    articles, jcr_filter, zky_filter, exclude_no_issn, max_results
+                )
+            else:
+                # 精确匹配,直接使用缓存结果
+                app.logger.info(f"[缓存-精确匹配] 直接使用 {len(articles)} 篇缓存文章")
+                filtered_articles = articles[:max_results]
+
+            excluded_no_issn = len(articles) - len(filtered_articles)
+
+            return {
+                'total_found': len(articles),
+                'articles': filtered_articles,
+                'filtered_count': len(filtered_articles),
+                'excluded_no_issn': excluded_no_issn,
+                'from_cache': True  # 标记来自缓存
+            }
+
+        # 缓存未命中,执行真实搜索
+        app.logger.info(f"[缓存未命中] 调用PubMed API搜索: {keywords[:50]}")
+
         # 第一步：搜索获取PMID
-        pmids = self.search_articles(keywords, max_results * 2, days_back, user_email)  # 获取更多数据用于筛选
-        
+        pmids = self.search_articles(keywords, max_results * 2, days_back, user_email)
+
         if not pmids:
             return {
                 'total_found': 0,
                 'articles': [],
                 'filtered_count': 0,
-                'excluded_no_issn': 0
+                'excluded_no_issn': 0,
+                'from_cache': False
             }
-        
+
         # 第二步：获取详细信息
         articles = self.get_article_details(pmids)
-        
+
         # 第三步：应用筛选条件
+        filtered_articles = self._apply_filters(
+            articles, jcr_filter, zky_filter, exclude_no_issn, max_results
+        )
+
+        excluded_no_issn = len(articles) - len(filtered_articles)
+
+        # 缓存搜索结果(缓存完整的articles,而非筛选后的结果)
+        try:
+            search_cache_service.set_cached_results(
+                keywords=keywords,
+                filter_params=filter_params,
+                pmids=pmids,
+                articles=articles  # 缓存完整结果供后续宽松匹配使用
+            )
+            app.logger.info(f"[缓存写入] 已缓存 {len(articles)} 篇文章")
+        except Exception as e:
+            app.logger.error(f"[缓存写入失败] {e}")
+
+        return {
+            'total_found': len(articles),
+            'articles': filtered_articles,
+            'filtered_count': len(filtered_articles),
+            'excluded_no_issn': excluded_no_issn,
+            'from_cache': False  # 标记来自API
+        }
+
+    def _apply_filters(self, articles, jcr_filter, zky_filter, exclude_no_issn, max_results):
+        """
+        应用筛选条件到文章列表
+
+        提取为独立方法供缓存宽松匹配时复用
+
+        Args:
+            articles: 文章列表
+            jcr_filter: JCR筛选条件
+            zky_filter: 中科院筛选条件
+            exclude_no_issn: 是否排除无ISSN文章
+            max_results: 最大结果数
+
+        Returns:
+            list: 筛选后的文章列表
+        """
         filtered_articles = []
-        excluded_no_issn = 0
-        
+
         for article in articles:
             # 检查是否有ISSN信息
             has_issn = bool(article.get('issn') or article.get('eissn'))
-            
+
             if exclude_no_issn and not has_issn:
-                excluded_no_issn += 1
                 continue
-            
+
             # 如果没有ISSN但不排除，则保留文章但不应用期刊筛选
             if not has_issn:
                 filtered_articles.append(article)
+                if len(filtered_articles) >= max_results:
+                    break
                 continue
-                
+
             # 应用JCR筛选
             if jcr_filter:
                 jcr_quartile = article.get('jcr_quartile', '')
                 if 'quartile' in jcr_filter:
                     if not jcr_quartile or jcr_quartile not in jcr_filter['quartile']:
                         continue
-                
+
                 if 'min_if' in jcr_filter:
                     jcr_if = article.get('jcr_if', '')
                     try:
@@ -4835,35 +4926,30 @@ class PubMedAPI:
                             continue
                     except (ValueError, TypeError):
                         continue
-            
+
             # 应用中科院筛选
             if zky_filter:
                 zky_category = article.get('zky_category', '')
                 zky_top = article.get('zky_top', '')
-                
+
                 if 'category' in zky_filter:
                     if not zky_category or zky_category not in zky_filter['category']:
                         continue
-                
+
                 if 'top' in zky_filter:
                     is_top = zky_top == '是'
                     if zky_filter['top'] and not is_top:
                         continue
                     if not zky_filter['top'] and is_top:
                         continue
-            
+
             filtered_articles.append(article)
-            
+
             # 限制最终结果数量
             if len(filtered_articles) >= max_results:
                 break
-        
-        return {
-            'total_found': len(articles),
-            'articles': filtered_articles,
-            'filtered_count': len(filtered_articles),
-            'excluded_no_issn': excluded_no_issn
-        }
+
+        return filtered_articles
     
     def search_and_count_with_filter(self, keywords, max_results=5000, days_back=30, 
                                    jcr_filter=None, zky_filter=None, exclude_no_issn=True, user_email=None):
@@ -9866,17 +9952,97 @@ def admin_rq_test():
     try:
         from rq_config import enqueue_job
         from tasks import test_rq_connection
-        
+
         job = enqueue_job(test_rq_connection, priority='high')
-        
+
         log_activity('INFO', 'admin', f'RQ连接测试已触发: {job.id}', current_user.id, request.remote_addr)
         flash(f'RQ连接测试任务已排队: {job.id}', 'admin')
-        
+
     except Exception as e:
         log_activity('ERROR', 'admin', f'RQ连接测试失败: {str(e)}', current_user.id, request.remote_addr)
         flash(f'RQ连接测试失败: {str(e)}', 'admin')
-    
+
     return redirect(url_for('admin_push'))
+
+# ==================== 搜索缓存管理API ====================
+
+@app.route('/admin/cache/stats')
+@admin_required
+def admin_cache_stats():
+    """获取缓存统计信息API"""
+    try:
+        stats = search_cache_service.get_cache_stats()
+        return jsonify({
+            'success': True,
+            'stats': stats
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/admin/cache/clear', methods=['POST'])
+@admin_required
+def admin_cache_clear():
+    """清空所有搜索缓存"""
+    try:
+        deleted_count = search_cache_service.clear_all_cache()
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 清空搜索缓存: {deleted_count}个键', current_user.id, request.remote_addr)
+        flash(f'缓存清空成功，删除 {deleted_count} 个缓存键', 'admin')
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count
+        })
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'清空缓存失败: {str(e)}', current_user.id, request.remote_addr)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/admin/cache/invalidate', methods=['POST'])
+@admin_required
+def admin_cache_invalidate():
+    """手动失效指定关键词的缓存"""
+    try:
+        keywords = request.json.get('keywords')
+        if not keywords:
+            return jsonify({
+                'success': False,
+                'error': '关键词不能为空'
+            }), 400
+
+        success = search_cache_service.invalidate_cache(keywords)
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 失效缓存: {keywords}', current_user.id, request.remote_addr)
+
+        return jsonify({
+            'success': success,
+            'message': f'关键词 "{keywords}" 的缓存已失效' if success else '失效失败'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/admin/cache/reset-stats', methods=['POST'])
+@admin_required
+def admin_cache_reset_stats():
+    """重置缓存统计信息"""
+    try:
+        success = search_cache_service.reset_cache_stats()
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 重置缓存统计', current_user.id, request.remote_addr)
+
+        return jsonify({
+            'success': success,
+            'message': '缓存统计已重置'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 # 邮箱管理路由
 @app.route('/admin/mail')

@@ -5184,6 +5184,10 @@ def sync_env_to_database():
 @app.before_request
 def before_request_sync():
     """在第一个请求时同步环境变量(多Worker安全)"""
+    # 如果正在初始化调度器，跳过同步避免嵌套触发
+    if getattr(app, '_scheduler_initializing', False):
+        return
+
     sync_flag_file = '/app/data/env_sync_done'
     lock_file = '/app/data/env_sync.lock'
 
@@ -5385,8 +5389,13 @@ def initialize_scheduler_safely():
 def ensure_scheduler_running():
     """确保调度器在第一个请求时运行"""
     if not hasattr(app, '_scheduler_init_attempted'):
-        with app.app_context():
-            initialize_scheduler_safely()
+        # 设置标记避免嵌套触发环境变量同步
+        app._scheduler_initializing = True
+        try:
+            with app.app_context():
+                initialize_scheduler_safely()
+        finally:
+            app._scheduler_initializing = False
         app._scheduler_init_attempted = True
 
 # 路由

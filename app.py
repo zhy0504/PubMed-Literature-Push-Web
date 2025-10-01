@@ -5441,8 +5441,8 @@ def index():
     search_results = None
     test_subscription = None
 
-    # 处理测试订阅请求(从URL参数)
-    if current_user.is_authenticated:
+    # 处理测试订阅请求(从URL参数) - 只在GET请求时处理
+    if current_user.is_authenticated and request.method == 'GET':
         test_sub_id = request.args.get('test_subscription_id')
         if test_sub_id:
             # 使用服务器端session防止重复加载
@@ -5453,7 +5453,7 @@ def index():
                 app.logger.info(f"测试订阅 {test_sub_id} 已处理，重定向到首页")
                 return redirect(url_for('index'))
 
-            # 标记为已加载
+            # 标记为已加载（只在首次GET请求时标记）
             session[session_key] = True
 
             subscription_obj = Subscription.query.filter_by(

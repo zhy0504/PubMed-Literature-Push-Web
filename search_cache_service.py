@@ -183,13 +183,13 @@ class SearchCacheService:
             if ttl is None:
                 ttl = self._calculate_dynamic_ttl(keywords, len(pmids))
 
-            # 构建缓存数据
+            # 构建缓存数据 (确保所有数据都可JSON序列化)
             cache_data = {
                 'pmids': pmids,
-                'articles': articles,
+                'articles': self._sanitize_for_json(articles),
                 'created_at': datetime.now().isoformat(),
                 'keywords': keywords,
-                'filter_params': filter_params,
+                'filter_params': self._sanitize_for_json(filter_params),
                 'hit_count': 0,
                 'result_count': len(pmids)
             }
@@ -437,6 +437,33 @@ class SearchCacheService:
             self.redis.set(self.STATS_KEY, json.dumps(stats))
         except Exception as e:
             logging.error(f"记录未命中失败: {e}")
+
+    def _sanitize_for_json(self, data: Any) -> Any:
+        """
+        清理数据使其可JSON序列化
+
+        处理常见的不可序列化类型:
+        - datetime对象 -> ISO格式字符串
+        - date对象 -> ISO格式字符串
+        - 递归处理dict和list
+
+        Args:
+            data: 需要清理的数据
+
+        Returns:
+            可JSON序列化的数据
+        """
+        if isinstance(data, datetime):
+            return data.isoformat()
+        elif isinstance(data, dict):
+            return {key: self._sanitize_for_json(value) for key, value in data.items()}
+        elif isinstance(data, (list, tuple)):
+            return [self._sanitize_for_json(item) for item in data]
+        elif hasattr(data, '__dict__'):
+            # 处理自定义对象
+            return self._sanitize_for_json(data.__dict__)
+        else:
+            return data
 
 
 # 全局缓存服务实例

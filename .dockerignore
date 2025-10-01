@@ -1,68 +1,112 @@
-# Python
+# Python运行时文件
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# 虚拟环境
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 quick_venv/
+venv_linux/
 
-# IDE
+# IDE配置
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# Git
-.git/
-.gitignore
-
-# Docker
-.dockerignore
-docker-compose.yml
-docker-compose.override.yml
-
-# Logs
-*.log
-logs/
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Local development
+# 版本控制
+.git/
+.gitignore
+.gitattributes
+
+# Docker相关
+.dockerignore
+docker-compose.yml
+docker-compose.override.yml
+docker-compose.dev.yml
+
+# 日志文件
+*.log
+logs/
+*.log.*
+
+# 环境配置(敏感信息)
 .env
 .env.local
 .env.development
 .env.test
 .env.production
+.env.backup
 
-# Build artifacts
+# 构建产物
 build/
 dist/
+*.egg-info/
+.eggs/
 
-# Documentation
+# 测试和覆盖率
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+*.cover
+*.py,cover
+
+# 文档
 *.md
+!README.md
 docs/
 
-# Test files
+# 测试文件
 test_*.py
 *_test.py
+tests/
 
-# Backup files
-*.bak
-*.backup
-
-# Temporary files
+# 临时文件和备份
 *.tmp
 *.temp
+*.bak
+*.backup
+*~
 
-# Migration backups
+# 数据库备份和迁移脚本
 migrate.bat
 migrate.sh
 migrate-simple.bat
+backup/
+
+# 本地开发脚本(保留docker-entrypoint.sh)
+start.sh
+start.bat
+deploy.sh
+docker-start.sh
+
+# 数据目录(通过volume挂载)
+data/
+pubmed_app.db
+
+# Nginx配置(通过volume挂载)
+nginx/
+
+# Flask实例文件夹
+instance/
+
+# 静态资源缓存
+.webassets-cache
+
+# Claude辅助文件夹
+.claude/
+
+# GitHub相关
+.github/

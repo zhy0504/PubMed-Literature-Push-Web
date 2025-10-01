@@ -4962,11 +4962,10 @@ class PubMedAPI:
                     if not zky_category or zky_category not in zky_filter['category']:
                         continue
 
-                if 'top' in zky_filter:
+                if 'top' in zky_filter and zky_filter['top']:
+                    # 只要求Top期刊时才筛选
                     is_top = zky_top == '是'
-                    if zky_filter['top'] and not is_top:
-                        continue
-                    if not zky_filter['top'] and is_top:
+                    if not is_top:
                         continue
 
             filtered_articles.append(article)
@@ -5074,11 +5073,10 @@ class PubMedAPI:
                     if not zky_category or zky_category not in zky_filter['category']:
                         continue
 
-                if 'top' in zky_filter:
+                if 'top' in zky_filter and zky_filter['top']:
+                    # 只要求Top期刊时才筛选
                     is_top = zky_top == '是'
-                    if zky_filter['top'] and not is_top:
-                        continue
-                    if not zky_filter['top'] and is_top:
+                    if not is_top:
                         continue
 
             filtered_count += 1

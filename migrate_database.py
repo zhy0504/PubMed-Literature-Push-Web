@@ -11,7 +11,13 @@ import os
 
 def migrate_database():
     """执行数据库迁移"""
-    db_path = os.path.join(os.path.dirname(__file__), 'pubmed_app.db')
+    # 支持Docker和本地环境
+    if os.path.exists('/app/data'):
+        # Docker环境
+        db_path = '/app/data/pubmed_app.db'
+    else:
+        # 本地环境
+        db_path = os.path.join(os.path.dirname(__file__), 'pubmed_app.db')
 
     if not os.path.exists(db_path):
         print(f"数据库文件不存在: {db_path}")

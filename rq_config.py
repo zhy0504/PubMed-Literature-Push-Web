@@ -85,7 +85,7 @@ def cancel_subscription_jobs(subscription_id: int):
                     try:
                         job = Job.fetch(job_id, connection=redis_conn)
                         job.cancel()
-                        registry.remove(job)
+                        registry.remove(job_id)  # 修复：传递job_id而不是job对象
                         cancelled_count += 1
                         logging.info(f"已取消调度任务: {job_id}")
                     except Exception as e:

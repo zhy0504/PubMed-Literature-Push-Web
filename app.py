@@ -29,7 +29,7 @@ from apscheduler.triggers.cron import CronTrigger
 import atexit
 import signal
 # RQ相关导入
-from rq_config import RQConfig, get_queue_info, get_failed_jobs, redis_conn, scheduler as rq_scheduler
+from rq_config import RQConfig, get_queue_info, get_failed_jobs, redis_conn
 # 延迟导入 tasks 避免循环导入
 # from tasks import batch_schedule_all_subscriptions, immediate_push_subscription
 import os
@@ -1889,11 +1889,9 @@ def init_scheduler():
         redis_conn.ping()
         print("✅ Redis连接正常")
 
-        # 启动RQ调度器
-        if not rq_scheduler.connection:
-            rq_scheduler.connection = redis_conn
-
-        print("✅ RQ调度器初始化完成")
+        # RQ原生调度已通过Worker --with-scheduler启用
+        # 不再需要单独的调度器对象
+        print("✅ RQ原生调度器通过Worker --with-scheduler运行")
 
         # 注意: 批量调度不在这里执行,避免循环导入
         # 需要手动执行: python /app/init_rq_schedules.py

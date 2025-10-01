@@ -5180,15 +5180,57 @@ def sync_env_to_database():
         print(f"[同步] ✗ 同步失败: {e}")
         app.logger.error(f"同步环境变量失败: {e}")
 
-# 使用 before_first_request 在第一次请求时执行同步
-_sync_done = False
-
+# 使用文件锁确保多Worker环境下只执行一次
 @app.before_request
 def before_request_sync():
-    global _sync_done
-    if not _sync_done:
-        sync_env_to_database()
-        _sync_done = True
+    """在第一个请求时同步环境变量(多Worker安全)"""
+    sync_flag_file = '/app/data/env_sync_done'
+
+    # 检查是否已完成同步
+    if os.path.exists(sync_flag_file):
+        # 检查文件年龄,超过1小时则认为可能需要重新同步
+        try:
+            file_mtime = os.path.getmtime(sync_flag_file)
+            if time.time() - file_mtime < 3600:  # 1小时内有效
+                return
+        except:
+            pass
+
+    # 使用文件锁防止并发执行
+    lock_file = '/app/data/env_sync.lock'
+    try:
+        # 尝试创建锁文件(原子操作)
+        import fcntl
+        lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            # 获得锁,执行同步
+            if not os.path.exists(sync_flag_file):
+                sync_env_to_database()
+                # 创建标记文件
+                with open(sync_flag_file, 'w') as f:
+                    f.write(str(os.getpid()))
+        finally:
+            os.close(lock_fd)
+            # 清理锁文件
+            try:
+                os.remove(lock_file)
+            except:
+                pass
+    except FileExistsError:
+        # 其他Worker正在执行同步,等待完成
+        max_wait = 10  # 最多等待10秒
+        waited = 0
+        while waited < max_wait and not os.path.exists(sync_flag_file):
+            time.sleep(0.1)
+            waited += 0.1
+    except Exception as e:
+        # 如果文件锁不可用,降级为进程级别的检查
+        global _sync_done
+        if not _sync_done:
+            sync_env_to_database()
+            _sync_done = True
+
+_sync_done = False  # 降级方案的备用标记
 
 # 应用上下文中初始化调度器（Flask 2.0+兼容）
 def initialize_scheduler_safely():
@@ -5210,8 +5252,22 @@ def initialize_scheduler_safely():
                         print("[RQ] 数据库不存在，跳过批量调度")
                         return
 
+                # 检查RQ调度标记文件的有效性
+                rq_schedule_valid = False
+                if os.path.exists(rq_schedule_flag_file):
+                    try:
+                        # 检查标记文件的修改时间,如果超过10分钟则认为失效
+                        file_mtime = os.path.getmtime(rq_schedule_flag_file)
+                        if time.time() - file_mtime < 600:  # 10分钟内有效
+                            rq_schedule_valid = True
+                        else:
+                            print("[RQ] 调度标记文件已过期，将触发重新调度")
+                            os.remove(rq_schedule_flag_file)
+                    except:
+                        pass
+
                 # 检查是否已经调度过
-                if not os.path.exists(rq_schedule_flag_file):
+                if not rq_schedule_valid:
                     print("[RQ] 检测到需要初始化订阅调度...")
 
                     # 检查是否有活跃订阅
@@ -12073,6 +12129,11 @@ def recover_scheduler_in_multiworker():
                 print(f"[Worker {current_pid}] 检测到僵死锁文件，PID:{locked_pid}，心跳超时:{heartbeat_age:.0f}秒")
                 os.remove(lock_file_path)
                 print(f"[Worker {current_pid}] 已清理僵死锁文件")
+                # 同时清理RQ调度标记,确保重启后自动恢复订阅
+                rq_schedule_flag_file = '/app/data/rq_schedule_init_done'
+                if os.path.exists(rq_schedule_flag_file):
+                    os.remove(rq_schedule_flag_file)
+                    print(f"[Worker {current_pid}] 已清理RQ调度标记，重启后将自动恢复订阅")
             else:
                 print(f"[Worker {current_pid}] 调度器运行在PID:{locked_pid}，心跳正常")
                 return
@@ -12081,6 +12142,11 @@ def recover_scheduler_in_multiworker():
             print(f"[Worker {current_pid}] 锁文件格式异常，清理中...")
             try:
                 os.remove(lock_file_path)
+                # 同时清理RQ调度标记
+                rq_schedule_flag_file = '/app/data/rq_schedule_init_done'
+                if os.path.exists(rq_schedule_flag_file):
+                    os.remove(rq_schedule_flag_file)
+                    print(f"[Worker {current_pid}] 已清理RQ调度标记")
             except:
                 pass
     

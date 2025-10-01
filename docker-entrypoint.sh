@@ -65,6 +65,31 @@ if [ "$RQ_MODE" = "enabled" ]; then
     echo "[RQ] Worker配置: ${RQ_WORKER_NAME:-default-worker}"
     echo "[RQ] 监听队列: ${RQ_QUEUES:-high,default,low}"
 
+    # 清理可能存在的过期RQ调度标记（容器重启时强制重新调度）
+    RQ_SCHEDULE_FLAG="/app/data/rq_schedule_init_done"
+    if [ -f "$RQ_SCHEDULE_FLAG" ]; then
+        echo "[RQ] 检测到调度标记文件，检查有效性..."
+        # 获取文件修改时间（秒）
+        FILE_MTIME=$(stat -c %Y "$RQ_SCHEDULE_FLAG" 2>/dev/null || echo 0)
+        CURRENT_TIME=$(date +%s)
+        AGE=$((CURRENT_TIME - FILE_MTIME))
+
+        # 如果文件超过5分钟，认为是容器重启，删除标记强制重新调度
+        if [ $AGE -gt 300 ]; then
+            echo "[RQ] 调度标记已过期(${AGE}秒)，删除以触发重新调度"
+            rm -f "$RQ_SCHEDULE_FLAG"
+        else
+            echo "[RQ] 调度标记有效(${AGE}秒内创建)"
+        fi
+    fi
+
+    # 清理环境变量同步标记（容器重启时强制重新同步）
+    ENV_SYNC_FLAG="/app/data/env_sync_done"
+    if [ -f "$ENV_SYNC_FLAG" ]; then
+        echo "[同步] 检测到环境变量同步标记，删除以触发重新同步"
+        rm -f "$ENV_SYNC_FLAG"
+    fi
+
     # 测试RQ配置
     if python -c "from rq_config import redis_conn; redis_conn.ping(); print('[RQ] 配置测试通过')" 2>/dev/null; then
         echo "[RQ] RQ配置验证成功"

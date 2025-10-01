@@ -5424,6 +5424,17 @@ def ensure_scheduler_running():
             app._scheduler_initializing = False
         app._scheduler_init_attempted = True
 
+# ==================== 健康检查端点 ====================
+@app.route('/health')
+def health_check():
+    """Docker healthcheck专用端点，避免访问首页导致的副作用"""
+    try:
+        # 检查数据库连接
+        db.session.execute(db.text('SELECT 1'))
+        return {'status': 'healthy', 'timestamp': datetime.now(APP_TIMEZONE).isoformat()}, 200
+    except Exception as e:
+        return {'status': 'unhealthy', 'error': str(e)}, 503
+
 # 路由
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -6381,7 +6392,7 @@ def search():
     # 如果有关键词参数，重定向到主页并保持参数
     keywords = request.form.get('keywords') or request.args.get('keywords')
     if keywords:
-        flash(f'搜索功能已集成到主页，请在主页搜索: {keywords}', 'info')
+        flash(f'搜索功能已集成到主页', 'info')
     return redirect(url_for('index'))
 
 @app.route('/subscribe_keyword', methods=['POST'])
@@ -6474,27 +6485,26 @@ def subscribe_keyword():
 def unsubscribe_keyword():
     """取消订阅关键词"""
     keywords = request.form.get('keywords', '').strip()
-    
+
     if not keywords:
         flash('关键词不能为空', 'warning')
         return redirect(url_for('index'))
-    
+
     subscription = Subscription.query.filter_by(
-        user_id=current_user.id, 
+        user_id=current_user.id,
         keywords=keywords
     ).first()
-    
+
     if subscription:
         db.session.delete(subscription)
         db.session.commit()
         log_activity('INFO', 'subscription', f'用户 {current_user.email} 取消订阅关键词: {keywords}', current_user.id, request.remote_addr)
-        flash(f'已取消订阅关键词: {keywords}', 'info')
+        flash(f'已取消订阅关键词: {keywords}', 'success')
     else:
         flash('您没有订阅此关键词', 'warning')
-    
-    # 重新搜索并显示结果
-    from urllib.parse import urlencode
-    return redirect(url_for('search') + '?' + urlencode({'keywords': keywords}))
+
+    # 重定向到订阅列表页
+    return redirect(url_for('subscriptions'))
 
 @app.route('/subscriptions')
 @login_required

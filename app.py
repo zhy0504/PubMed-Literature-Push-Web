@@ -5434,6 +5434,17 @@ def index():
     if current_user.is_authenticated:
         test_sub_id = request.args.get('test_subscription_id')
         if test_sub_id:
+            # 使用服务器端session防止重复加载
+            session_key = f'test_sub_loaded_{test_sub_id}_{current_user.id}'
+
+            # 如果已经加载过这个测试订阅，直接重定向到首页清除URL参数
+            if session.get(session_key):
+                app.logger.info(f"测试订阅 {test_sub_id} 已处理，重定向到首页")
+                return redirect(url_for('index'))
+
+            # 标记为已加载
+            session[session_key] = True
+
             subscription_obj = Subscription.query.filter_by(
                 id=int(test_sub_id),
                 user_id=current_user.id
@@ -5898,16 +5909,6 @@ def get_index_template():
         // 测试订阅功能 - 自动填充和提交表单
         {% if test_subscription %}
         document.addEventListener('DOMContentLoaded', function() {
-            // 防止重复提交：检查是否已经自动提交过
-            var testSubId = {{ test_subscription.id }};
-            var submitKey = 'test_sub_submitted_' + testSubId;
-
-            // 如果已经提交过，不再重复提交
-            if (sessionStorage.getItem(submitKey)) {
-                console.log('测试订阅已提交，跳过自动提交');
-                return;
-            }
-
             var form = document.getElementById('searchForm');
             var subscription = {{ test_subscription|tojson }};
 
@@ -5985,9 +5986,7 @@ def get_index_template():
                 }
             }
 
-            // 标记已提交并自动提交表单
-            sessionStorage.setItem(submitKey, 'true');
-
+            // 自动提交表单（服务器端已通过session防止重复）
             setTimeout(function() {
                 var submitButton = form.querySelector('button[type="submit"]');
                 if (submitButton) {

@@ -690,7 +690,7 @@ class User(UserMixin, db.Model):
     
     # 订阅权限控制字段
     max_subscriptions = db.Column(db.Integer, default=3)  # 最大订阅数量
-    allowed_frequencies = db.Column(db.Text, default='weekly')  # 允许的推送频率，逗号分隔
+    allowed_frequencies = db.Column(db.Text, default='daily,weekly,monthly')  # 允许的推送频率，逗号分隔
     
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)

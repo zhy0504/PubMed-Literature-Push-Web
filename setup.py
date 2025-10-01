@@ -100,7 +100,7 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_push TIMESTAMP,
                 max_subscriptions INTEGER DEFAULT 10,
-                allowed_frequencies VARCHAR(100) DEFAULT 'daily,weekly,monthly'
+                allowed_frequencies TEXT DEFAULT 'daily,weekly,monthly'
             )
         ''')
         
@@ -113,7 +113,7 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 is_active BOOLEAN DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_search TIMESTAMP,
-                max_results INTEGER DEFAULT 10000,
+                max_results INTEGER DEFAULT 200,
                 days_back INTEGER DEFAULT 30,
                 exclude_no_issn BOOLEAN DEFAULT 1,
                 jcr_quartiles TEXT,

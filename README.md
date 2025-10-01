@@ -283,33 +283,58 @@ services:
 
 ## 数据库管理
 
-项目使用 SQLAlchemy 管理数据库，支持数据库迁移。
+项目使用 SQLAlchemy 管理数据库，通过 `db.create_all()` 自动创建表结构。
 
-### 初始化迁移（首次）
+### 数据库初始化
+
+数据库会在首次运行 `setup.py` 时自动创建和初始化：
 
 ```bash
-python manage.py db init
+# 使用默认配置初始化
+python setup.py --default
+
+# 或使用交互式向导
+python setup.py
 ```
 
-### 生成迁移文件
+### 重置数据库
+
+如需重置数据库，只需删除数据库文件后重新运行初始化：
 
 ```bash
-python manage.py db migrate -m "描述信息"
-```
+# 删除数据库文件
+rm pubmed_app.db  # Linux/macOS
+del pubmed_app.db  # Windows
 
-### 应用迁移
-
-```bash
-python manage.py db upgrade
+# 重新初始化
+python setup.py --default
 ```
 
 ### 切换数据库
 
-如需切换数据库（如 PostgreSQL/MySQL），请在 `app.py` 中更新 SQLAlchemy 连接字符串。
+如需切换到 PostgreSQL 或 MySQL，请按以下步骤操作：
 
-**示例：切换到 PostgreSQL**
+**1. 安装对应的数据库驱动**
+```bash
+# PostgreSQL
+pip install psycopg2-binary
+
+# MySQL
+pip install pymysql
+```
+
+**2. 修改 `app.py` 中的数据库连接字符串**
 ```python
+# PostgreSQL 示例
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://user:password@localhost/dbname'
+
+# MySQL 示例
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://user:password@localhost/dbname'
+```
+
+**3. 重新初始化数据库**
+```bash
+python setup.py --default
 ```
 
 ---

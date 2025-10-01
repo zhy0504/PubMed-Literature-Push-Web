@@ -421,21 +421,135 @@ python app.py
 
 ## 部署指南
 
-### 使用 Docker 部署
+### 部署架构说明
 
-**1. 构建镜像**
+项目支持三种部署方式：
+
+| 部署方式 | 适用场景 | 特点 |
+|---------|---------|------|
+| **Docker Compose（推荐）** | 生产环境 | 完整服务栈，包含 Redis、RQ Worker、健康检查、自动重启 |
+| **Docker 单容器** | 轻量部署 | 单容器运行，使用 APScheduler 降级模式，无需 Redis |
+| **Gunicorn** | 传统部署 | 直接在服务器运行，适合已有基础设施的场景 |
+
+### Docker Compose 服务组件
+
+| 服务名 | 端口 | 说明 | 资源限制 |
+|-------|------|------|---------|
+| `app` | 5005 | 主应用服务（Gunicorn + Flask） | 2 CPU, 2G 内存 |
+| `redis` | 6379 | 缓存与消息代理 | 1 CPU, 768M 内存 |
+| `worker-1` | - | RQ 任务队列 Worker 1 | 1 CPU, 1G 内存 |
+| `worker-2` | - | RQ 任务队列 Worker 2 | 1 CPU, 1G 内存 |
+| `rq-dashboard` | 9181 | 任务队列监控面板 | 0.5 CPU, 256M 内存 |
+
+---
+
+### 使用 Docker Compose 部署（推荐）
+
+项目提供生产级 Docker Compose 配置，包含 Redis、RQ Worker、RQ Dashboard 等完整服务。
+
+#### 1. 准备环境文件
+
+创建 `.env` 文件配置环境变量：
+
+```bash
+# 时区设置
+TZ=Asia/Shanghai
+
+# 日志级别
+LOG_LEVEL=INFO
+
+# RQ Dashboard 认证（可选）
+RQ_DASHBOARD_USER=admin
+RQ_DASHBOARD_PASS=your_secure_password
+
+# OpenAI API 配置（可选，在后台管理界面配置更灵活）
+# OPENAI_API_KEY=your_api_key
+```
+
+#### 2. 启动服务
+
+```bash
+# 使用预构建镜像（推荐）
+docker-compose -f docker-compose.prod.yml up -d
+
+# 或本地构建镜像
+docker build -t ghcr.io/zhy0504/pubmed-literature-push-web:latest .
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+#### 3. 验证服务状态
+
+```bash
+# 查看所有服务状态
+docker-compose -f docker-compose.prod.yml ps
+
+# 查看应用日志
+docker-compose -f docker-compose.prod.yml logs -f app
+
+# 查看 Worker 日志
+docker-compose -f docker-compose.prod.yml logs -f worker-1
+```
+
+#### 4. 访问服务
+
+- **主应用**: http://localhost:5005
+- **RQ Dashboard**: http://localhost:9181 (监控任务队列)
+- **默认管理员账号**: `admin@pubmed.com` / `admin123`
+
+#### 5. 常用管理命令
+
+```bash
+# 停止所有服务
+docker-compose -f docker-compose.prod.yml down
+
+# 重启服务
+docker-compose -f docker-compose.prod.yml restart
+
+# 查看资源占用
+docker stats
+
+# 清理未使用的资源
+docker system prune -a
+```
+
+### 使用 Docker 单容器部署
+
+如果不需要 Redis 和 RQ Worker，可以使用单容器部署：
+
+#### 1. 构建镜像
+
 ```bash
 docker build -t pubmed-push-web .
 ```
 
-**2. 运行容器**
+#### 2. 运行容器
+
 ```bash
-docker run -d -p 5003:5003 \
+docker run -d \
+  -p 5005:5005 \
   -e TZ=Asia/Shanghai \
+  -e RQ_MODE=fallback \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
   --name pubmed-push-web \
   pubmed-push-web
+```
+
+**参数说明**:
+- `-p 5005:5005`: 映射端口到宿主机
+- `-e TZ=Asia/Shanghai`: 设置时区
+- `-e RQ_MODE=fallback`: 使用 APScheduler 降级模式（不依赖 Redis）
+- `-v $(pwd)/data:/app/data`: 持久化数据库
+- `-v $(pwd)/logs:/app/logs`: 持久化日志
+
+#### 3. 查看日志
+
+```bash
+# 实时查看日志
+docker logs -f pubmed-push-web
+
+# 查看最近 100 行日志
+docker logs --tail 100 pubmed-push-web
 ```
 
 ### 使用 Gunicorn 部署

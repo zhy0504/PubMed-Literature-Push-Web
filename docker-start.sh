@@ -98,7 +98,7 @@ start_dev() {
     echo -e "${GREEN}✓${NC} 开发环境启动完成！"
     echo ""
     echo "访问地址:"
-    echo "  主应用: http://localhost:5003"
+    echo "  主应用: http://localhost:5005"
     echo "  RQ Dashboard: http://localhost:9181 (如果启用)"
     echo ""
     echo "查看日志: $0 logs"
@@ -114,7 +114,7 @@ start_prod() {
     echo -e "${GREEN}✓${NC} 生产环境启动完成！"
     echo ""
     echo "访问地址:"
-    echo "  主应用: http://localhost:5003"
+    echo "  主应用: http://localhost:5005"
     echo "  Nginx: http://localhost:80"
     echo "  RQ Dashboard: http://localhost:9181"
     echo ""
@@ -131,7 +131,7 @@ start_dashboard() {
     echo -e "${GREEN}✓${NC} 完整环境启动完成！"
     echo ""
     echo "访问地址:"
-    echo "  主应用: http://localhost:5003"
+    echo "  主应用: http://localhost:5005"
     echo "  RQ Dashboard: http://localhost:9181"
 }
 

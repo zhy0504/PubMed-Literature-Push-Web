@@ -28,7 +28,7 @@ services:
     image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
     container_name: pubmed-literature-push
     ports:
-      - "5003:5003"
+      - "5005:5005"
     env_file:
       - .env
     environment:
@@ -49,7 +49,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5003/"]
+      test: ["CMD", "curl", "-f", "http://localhost:5005/"]
       interval: 30s
       timeout: 10s
       retries: 3

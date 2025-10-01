@@ -271,6 +271,21 @@ class SearchCacheService:
             stats['total_requests'] = total_requests
             stats['enabled'] = True
 
+            # 获取当前缓存键数量
+            cache_count = 0
+            cursor = 0
+            while True:
+                cursor, keys = self.redis.scan(
+                    cursor=cursor,
+                    match=f"{self.CACHE_PREFIX}:*",
+                    count=100
+                )
+                cache_count += len(keys)
+                if cursor == 0:
+                    break
+
+            stats['cache_count'] = cache_count
+
             return stats
 
         except Exception as e:

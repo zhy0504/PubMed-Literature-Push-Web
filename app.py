@@ -6953,6 +6953,7 @@ def admin_dashboard():
                             <a href="/admin/subscriptions" class="btn btn-success me-2">订阅管理</a>
                             <a href="/admin/push" class="btn btn-warning me-2">推送管理</a>
                             <a href="/admin/mail" class="btn btn-info me-2">邮箱管理</a>
+                            <a href="/admin/cache" class="btn btn-info me-2">L1缓存管理</a>
                             <a href="/admin/ai" class="btn btn-info me-2">AI设置</a>
                             <a href="/admin/system" class="btn btn-info me-2">系统设置</a>
                             <a href="/admin/logs" class="btn btn-secondary">查看日志</a>
@@ -10147,6 +10148,320 @@ def admin_rq_test():
     return redirect(url_for('admin_push'))
 
 # ==================== 搜索缓存管理API ====================
+
+@app.route('/admin/cache')
+@admin_required
+def admin_cache():
+    """L1搜索缓存管理页面"""
+    template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>L1搜索缓存管理 - PubMed Literature Push</title>
+        <meta charset="utf-8">
+        <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
+        <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+        <style>
+            .stat-card { transition: transform 0.2s; }
+            .stat-card:hover { transform: translateY(-5px); }
+            .metric-value { font-size: 2.5rem; font-weight: bold; }
+            .metric-label { color: #6c757d; font-size: 0.9rem; }
+            .badge-enabled { background-color: #28a745; }
+            .badge-disabled { background-color: #dc3545; }
+        </style>
+    </head>
+    <body>
+        <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+            <div class="container">
+                <a class="navbar-brand" href="/"><i class="fas fa-microscope"></i> PubMed Literature Push</a>
+                <div class="navbar-nav ms-auto">
+                    <a class="nav-link" href="/">首页</a>
+                    <a class="nav-link" href="/admin">管理员</a>
+                    <a class="nav-link" href="/logout">退出</a>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container mt-4">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h2><i class="fas fa-server"></i> L1搜索缓存管理</h2>
+                    <p class="text-muted">智能缓存优化PubMed API调用，提升70-90%响应速度</p>
+                </div>
+                <div>
+                    <a href="/admin" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> 返回管理员
+                    </a>
+                </div>
+            </div>
+
+            {% with messages = get_flashed_messages(category_filter=['admin']) %}
+                {% if messages %}
+                    {% for message in messages %}
+                        <div class="alert alert-success alert-dismissible fade show">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <!-- 缓存状态 -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5><i class="fas fa-info-circle"></i> 缓存状态</h5>
+                    <span id="cache-status-badge" class="badge">加载中...</span>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center">
+                        <div class="col-md-3">
+                            <div class="stat-card p-3">
+                                <div class="metric-value text-primary" id="hit-rate">-</div>
+                                <div class="metric-label">缓存命中率</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-card p-3">
+                                <div class="metric-value text-success" id="total-hits">-</div>
+                                <div class="metric-label">总命中次数</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-card p-3">
+                                <div class="metric-value text-warning" id="total-requests">-</div>
+                                <div class="metric-label">总请求次数</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-card p-3">
+                                <div class="metric-value text-info" id="cache-count">-</div>
+                                <div class="metric-label">当前缓存数</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 命中详情 -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5><i class="fas fa-chart-bar"></i> 命中详情</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <p><strong>精确匹配命中:</strong> <span id="exact-hits" class="text-success">-</span></p>
+                        </div>
+                        <div class="col-md-4">
+                            <p><strong>宽松匹配命中:</strong> <span id="relaxed-hits" class="text-info">-</span></p>
+                        </div>
+                        <div class="col-md-4">
+                            <p><strong>缓存未命中:</strong> <span id="total-misses" class="text-danger">-</span></p>
+                        </div>
+                    </div>
+                    <div class="progress" style="height: 30px;">
+                        <div id="exact-bar" class="progress-bar bg-success" role="progressbar" style="width: 0%">精确</div>
+                        <div id="relaxed-bar" class="progress-bar bg-info" role="progressbar" style="width: 0%">宽松</div>
+                        <div id="miss-bar" class="progress-bar bg-danger" role="progressbar" style="width: 0%">未命中</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 缓存管理操作 -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5><i class="fas fa-tools"></i> 缓存管理操作</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6>失效特定关键词缓存</h6>
+                            <div class="input-group mb-3">
+                                <input type="text" class="form-control" id="invalidate-keywords"
+                                       placeholder="输入关键词（例如：cancer treatment）">
+                                <button class="btn btn-warning" onclick="invalidateCache()">
+                                    <i class="fas fa-eraser"></i> 失效缓存
+                                </button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>全局操作</h6>
+                            <button class="btn btn-primary me-2" onclick="refreshStats()">
+                                <i class="fas fa-sync"></i> 刷新统计
+                            </button>
+                            <button class="btn btn-info me-2" onclick="resetStats()">
+                                <i class="fas fa-redo"></i> 重置统计
+                            </button>
+                            <button class="btn btn-danger" onclick="clearAllCache()">
+                                <i class="fas fa-trash"></i> 清空所有缓存
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 缓存信息 -->
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-book"></i> 缓存说明</h5>
+                </div>
+                <div class="card-body">
+                    <h6>核心优势</h6>
+                    <ul>
+                        <li>API调用节省: 相同关键词搜索可节省70-90%的PubMed API调用</li>
+                        <li>响应速度提升: 缓存命中时响应时间从3-5秒降低到<100ms</li>
+                        <li>智能降级: Redis不可用时自动回退到直接搜索</li>
+                        <li>多级缓存策略: 精确匹配 → 宽松匹配 → 直接搜索</li>
+                    </ul>
+                    <h6>缓存策略</h6>
+                    <p><strong>TTL范围:</strong> 30分钟 - 24小时（根据结果数量和时间因素动态调整）</p>
+                    <p><strong>最后统计重置:</strong> <span id="last-reset">-</span></p>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
+        <script>
+            // 加载缓存统计
+            async function refreshStats() {
+                try {
+                    const response = await fetch('/admin/cache/stats');
+                    const data = await response.json();
+
+                    if (data.success) {
+                        const stats = data.stats;
+
+                        // 更新状态徽章
+                        const statusBadge = document.getElementById('cache-status-badge');
+                        if (stats.enabled) {
+                            statusBadge.className = 'badge badge-enabled';
+                            statusBadge.textContent = '已启用';
+                        } else {
+                            statusBadge.className = 'badge badge-disabled';
+                            statusBadge.textContent = '已禁用';
+                        }
+
+                        // 更新主要指标
+                        document.getElementById('hit-rate').textContent = stats.hit_rate.toFixed(1) + '%';
+                        document.getElementById('total-hits').textContent = stats.total_hits;
+                        document.getElementById('total-requests').textContent = stats.total_requests;
+                        document.getElementById('cache-count').textContent = stats.cache_count || 0;
+
+                        // 更新命中详情
+                        document.getElementById('exact-hits').textContent = stats.exact_hits;
+                        document.getElementById('relaxed-hits').textContent = stats.relaxed_hits;
+                        document.getElementById('total-misses').textContent = stats.total_misses;
+
+                        // 更新进度条
+                        const total = stats.total_requests || 1;
+                        const exactPercent = (stats.exact_hits / total * 100).toFixed(1);
+                        const relaxedPercent = (stats.relaxed_hits / total * 100).toFixed(1);
+                        const missPercent = (stats.total_misses / total * 100).toFixed(1);
+
+                        document.getElementById('exact-bar').style.width = exactPercent + '%';
+                        document.getElementById('exact-bar').textContent = `精确 ${exactPercent}%`;
+                        document.getElementById('relaxed-bar').style.width = relaxedPercent + '%';
+                        document.getElementById('relaxed-bar').textContent = `宽松 ${relaxedPercent}%`;
+                        document.getElementById('miss-bar').style.width = missPercent + '%';
+                        document.getElementById('miss-bar').textContent = `未命中 ${missPercent}%`;
+
+                        // 更新最后重置时间
+                        document.getElementById('last-reset').textContent = stats.last_reset || '从未';
+                    }
+                } catch (error) {
+                    console.error('加载统计失败:', error);
+                    alert('加载统计失败: ' + error.message);
+                }
+            }
+
+            // 失效特定关键词缓存
+            async function invalidateCache() {
+                const keywords = document.getElementById('invalidate-keywords').value.trim();
+                if (!keywords) {
+                    alert('请输入关键词');
+                    return;
+                }
+
+                if (!confirm(`确定要失效关键词 "${keywords}" 的缓存吗?`)) {
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/admin/cache/invalidate', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({keywords: keywords})
+                    });
+                    const data = await response.json();
+
+                    if (data.success) {
+                        alert('缓存失效成功');
+                        document.getElementById('invalidate-keywords').value = '';
+                        refreshStats();
+                    } else {
+                        alert('失效失败: ' + data.error);
+                    }
+                } catch (error) {
+                    alert('操作失败: ' + error.message);
+                }
+            }
+
+            // 重置统计
+            async function resetStats() {
+                if (!confirm('确定要重置缓存统计信息吗？这不会删除缓存数据。')) {
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/admin/cache/reset-stats', {
+                        method: 'POST'
+                    });
+                    const data = await response.json();
+
+                    if (data.success) {
+                        alert('统计信息已重置');
+                        refreshStats();
+                    } else {
+                        alert('重置失败: ' + data.error);
+                    }
+                } catch (error) {
+                    alert('操作失败: ' + error.message);
+                }
+            }
+
+            // 清空所有缓存
+            async function clearAllCache() {
+                if (!confirm('警告：确定要清空所有搜索缓存吗？此操作不可撤销！')) {
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/admin/cache/clear', {
+                        method: 'POST'
+                    });
+                    const data = await response.json();
+
+                    if (data.success) {
+                        alert(`成功清空 ${data.deleted_count} 个缓存键`);
+                        refreshStats();
+                    } else {
+                        alert('清空失败: ' + data.error);
+                    }
+                } catch (error) {
+                    alert('操作失败: ' + error.message);
+                }
+            }
+
+            // 页面加载时刷新统计
+            refreshStats();
+
+            // 每30秒自动刷新
+            setInterval(refreshStats, 30000);
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(template)
 
 @app.route('/admin/cache/stats')
 @admin_required

@@ -423,13 +423,14 @@ python app.py
 
 ### 部署架构说明
 
-项目支持三种部署方式：
+**重要提示**：本项目必须使用 Docker Compose 部署，强依赖 Redis 和 RQ 任务队列。
 
-| 部署方式 | 适用场景 | 特点 |
-|---------|---------|------|
-| **Docker Compose（推荐）** | 生产环境 | 完整服务栈，包含 Redis、RQ Worker、健康检查、自动重启 |
-| **Docker 单容器** | 轻量部署 | 单容器运行，使用 APScheduler 降级模式，无需 Redis |
-| **Gunicorn** | 传统部署 | 直接在服务器运行，适合已有基础设施的场景 |
+| 组件 | 是否必需 | 说明 |
+|------|---------|------|
+| **Redis** | ✅ 必需 | 缓存和任务队列消息代理 |
+| **主应用 (app)** | ✅ 必需 | Flask Web 应用，处理 HTTP 请求 |
+| **RQ Worker** | ✅ 必需 | 处理异步任务（文献推送、邮件发送） |
+| **RQ Dashboard** | ❌ 可选 | 任务队列监控面板 |
 
 ### Docker Compose 服务组件
 
@@ -511,62 +512,6 @@ docker stats
 # 清理未使用的资源
 docker system prune -a
 ```
-
-### 使用 Docker 单容器部署
-
-如果不需要 Redis 和 RQ Worker，可以使用单容器部署：
-
-#### 1. 构建镜像
-
-```bash
-docker build -t pubmed-push-web .
-```
-
-#### 2. 运行容器
-
-```bash
-docker run -d \
-  -p 5005:5005 \
-  -e TZ=Asia/Shanghai \
-  -e RQ_MODE=fallback \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/logs:/app/logs \
-  --name pubmed-push-web \
-  pubmed-push-web
-```
-
-**参数说明**:
-- `-p 5005:5005`: 映射端口到宿主机
-- `-e TZ=Asia/Shanghai`: 设置时区
-- `-e RQ_MODE=fallback`: 使用 APScheduler 降级模式（不依赖 Redis）
-- `-v $(pwd)/data:/app/data`: 持久化数据库
-- `-v $(pwd)/logs:/app/logs`: 持久化日志
-
-#### 3. 查看日志
-
-```bash
-# 实时查看日志
-docker logs -f pubmed-push-web
-
-# 查看最近 100 行日志
-docker logs --tail 100 pubmed-push-web
-```
-
-### 使用 Gunicorn 部署
-
-**1. 安装 Gunicorn**
-```bash
-pip install gunicorn
-```
-
-**2. 启动服务**
-```bash
-gunicorn -w 4 -b 0.0.0.0:5003 app:app
-```
-
-**参数说明**
-- `-w 4`：使用 4 个 worker 进程
-- `-b 0.0.0.0:5003`：绑定到所有网络接口的 5003 端口
 
 ### 生产环境配置建议
 

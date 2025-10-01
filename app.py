@@ -14,7 +14,6 @@ PubMed Literature Push Web Application - v2.0.0
 
 from flask import Flask, render_template_string, request, flash, redirect, url_for, jsonify, send_from_directory, session
 from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
@@ -418,7 +417,6 @@ if log_file:
 
 # 初始化扩展
 db = SQLAlchemy(app)
-migrate = Migrate(app, db)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'

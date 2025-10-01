@@ -61,7 +61,7 @@ fi
 log_info "初始化目录结构..."
 mkdir -p /app/data /app/logs
 
-# 4. 数据库初始化和迁移
+# 4. 数据库初始化
 DB_VALID=false
 DB_PATH="/app/data/pubmed_app.db"
 
@@ -70,12 +70,6 @@ if [ -f "$DB_PATH" ]; then
     if sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='user';" 2>/dev/null | grep -q "user"; then
         DB_VALID=true
         log_info "数据库验证通过"
-
-        # 执行数据库迁移(如有需要)
-        if [ -d "/app/migrations/versions" ]; then
-            log_info "检查数据库迁移..."
-            python manage.py db upgrade 2>/dev/null || log_warn "数据库迁移失败或无需迁移"
-        fi
     else
         log_warn "数据库文件损坏,重新初始化..."
         rm -f "$DB_PATH"

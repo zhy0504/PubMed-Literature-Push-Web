@@ -48,14 +48,14 @@ RUN adduser --disabled-password --gecos '' appuser && \
 USER appuser
 
 # 暴露端口
-EXPOSE 5003
+EXPOSE 5005
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5003/ || exit 1
+    CMD curl -f http://localhost:5005/ || exit 1
 
 # 设置入口点
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # 启动命令 - 4worker配置，提升并发处理能力
-CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "4", "--timeout", "600", "--graceful-timeout", "300", "--preload", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5005", "--workers", "4", "--timeout", "600", "--graceful-timeout", "300", "--preload", "app:app"]

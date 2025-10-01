@@ -11694,7 +11694,7 @@ if __name__ == '__main__':
         if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
             print("=== PubMed Literature Push Web Application ===")
             print("Starting server...")
-            print("URL: http://127.0.0.1:5003")
+            print("URL: http://127.0.0.1:5005")
             print("Default admin accounts: admin@pubmed.com / admin123, backup-admin@pubmed.com / admin123")
             print("注意：如使用自定义设置，请使用您设置的账号密码")
             print("Press Ctrl+C to stop server")
@@ -11713,7 +11713,7 @@ if __name__ == '__main__':
             # 禁用开发服务器警告（仅用于个人项目）
             import warnings
             warnings.filterwarnings("ignore", message=".*development server.*")
-            app.run(host='127.0.0.1', port=5003, debug=debug_mode)
+            app.run(host='127.0.0.1', port=5005, debug=debug_mode)
         except KeyboardInterrupt:
             print("\\n服务器已停止")
         finally:

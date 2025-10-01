@@ -5066,9 +5066,6 @@ class PubMedAPI:
                 zky_category = quality_info.get('zky_category', '')
                 zky_top = quality_info.get('zky_top', '')
 
-                # 调试日志
-                app.logger.debug(f"[中科院筛选] 文章分区={zky_category}, 筛选条件={zky_filter.get('category')}")
-
                 if 'category' in zky_filter:
                     if not zky_category or zky_category not in zky_filter['category']:
                         continue

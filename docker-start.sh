@@ -186,8 +186,11 @@ from rq_config import get_queue_info
 import json
 info = get_queue_info()
 print('队列状态:')
-for name, data in info.items():
-    print(f'  {name}: 待处理={data[\"length\"]}, 失败={data[\"failed\"]}, 完成={data[\"finished\"]}')
+for name in ['high', 'default', 'low']:
+    if name in info:
+        data = info[name]
+        print(f'  {name}: 待处理={data[\"length\"]}, 调度={data[\"scheduled\"]}, 失败={data[\"failed\"]}, 完成={data[\"finished\"]}')
+print(f'  总调度任务: {info.get(\"total_scheduled\", 0)}')
 " 2>/dev/null || echo -e "${RED}✗${NC} 无法获取队列状态"
 }
 

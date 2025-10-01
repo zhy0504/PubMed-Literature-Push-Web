@@ -1926,11 +1926,11 @@ def monitor_rq_scheduler():
         queue_info = get_queue_info()
         
         # 记录队列状态
-        log_activity('INFO', 'rq_monitor', 
+        log_activity('INFO', 'rq_monitor',
             f'RQ队列状态 - 高优先级:{queue_info["high"]["length"]}, '
             f'默认:{queue_info["default"]["length"]}, '
             f'低优先级:{queue_info["low"]["length"]}, '
-            f'定时任务:{queue_info["scheduled"]}')
+            f'定时任务:{queue_info["total_scheduled"]}')
             
         # 检查失败任务数量
         failed_jobs = get_failed_jobs()
@@ -8490,7 +8490,7 @@ def admin_push():
             'failed_jobs_count': rq_status['failed_jobs_count'],
             'timezone': SYSTEM_TIMEZONE,
             'current_time': get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z'),
-            'next_run': f'动态调度中 ({rq_status["queue_info"]["scheduled"]} 个待执行任务)'
+            'next_run': f'动态调度中 ({rq_status["queue_info"]["total_scheduled"]} 个待执行任务)'
         }
     else:
         # 降级到APScheduler模式

@@ -5464,13 +5464,13 @@ def index():
                 current_time = time.time()
                 session_key = f'search_{keywords}_{current_user.id}'
                 last_search_time = session.get(session_key, 0)
-                
-                # 调整时间窗口到5秒，防止重复搜索请求
-                if current_time - last_search_time < 5:
+
+                # 调整时间窗口到30秒，防止重复搜索请求
+                if current_time - last_search_time < 30:
                     app.logger.warning(f"重复搜索请求被拒绝: {keywords} (用户: {current_user.email}, 间隔: {current_time - last_search_time:.1f}秒)")
-                    flash('请不要重复提交搜索请求', 'warning')
-                    return render_template_string(get_index_template(), search_results=search_results)
-                
+                    flash('请不要重复提交搜索请求，请等待上一次搜索完成', 'warning')
+                    return render_template_string(get_index_template(), search_results=search_results, test_subscription=test_subscription)
+
                 # 记录本次搜索时间
                 session[session_key] = current_time
                 app.logger.info(f"开始处理搜索请求: {keywords} (用户: {current_user.email})")
@@ -5876,18 +5876,38 @@ def get_index_template():
         // 删除搜索模式切换功能，因为现在只有一种搜索模式
 
         // 防止重复提交搜索表单
+        var searchFormSubmitting = false;
         function disableSearchButton(button) {
+            // 防止重复点击
+            if (searchFormSubmitting) {
+                return false;
+            }
+            searchFormSubmitting = true;
+
             button.disabled = true;
             button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 搜索中...';
+
             // 避免禁用按钮导致表单无法提交
             setTimeout(function() {
                 button.closest('form').submit();
             }, 100);
+
+            return false;
         }
 
         // 测试订阅功能 - 自动填充和提交表单
         {% if test_subscription %}
         document.addEventListener('DOMContentLoaded', function() {
+            // 防止重复提交：检查是否已经自动提交过
+            var testSubId = {{ test_subscription.id }};
+            var submitKey = 'test_sub_submitted_' + testSubId;
+
+            // 如果已经提交过，不再重复提交
+            if (sessionStorage.getItem(submitKey)) {
+                console.log('测试订阅已提交，跳过自动提交');
+                return;
+            }
+
             var form = document.getElementById('searchForm');
             var subscription = {{ test_subscription|tojson }};
 
@@ -5965,7 +5985,9 @@ def get_index_template():
                 }
             }
 
-            // 自动提交表单
+            // 标记已提交并自动提交表单
+            sessionStorage.setItem(submitKey, 'true');
+
             setTimeout(function() {
                 var submitButton = form.querySelector('button[type="submit"]');
                 if (submitButton) {

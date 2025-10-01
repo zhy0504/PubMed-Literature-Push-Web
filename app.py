@@ -5185,10 +5185,10 @@ def sync_env_to_database():
 def before_request_sync():
     """在第一个请求时同步环境变量(多Worker安全)"""
     sync_flag_file = '/app/data/env_sync_done'
+    lock_file = '/app/data/env_sync.lock'
 
-    # 检查是否已完成同步
+    # 快速路径：检查是否已完成同步
     if os.path.exists(sync_flag_file):
-        # 检查文件年龄,超过1小时则认为可能需要重新同步
         try:
             file_mtime = os.path.getmtime(sync_flag_file)
             if time.time() - file_mtime < 3600:  # 1小时内有效
@@ -5197,38 +5197,53 @@ def before_request_sync():
             pass
 
     # 使用文件锁防止并发执行
-    lock_file = '/app/data/env_sync.lock'
+    lock_fd = None
     try:
         # 尝试创建锁文件(原子操作)
         import fcntl
-        lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        try:
-            # 获得锁,执行同步
-            if not os.path.exists(sync_flag_file):
-                sync_env_to_database()
-                # 创建标记文件
-                with open(sync_flag_file, 'w') as f:
-                    f.write(str(os.getpid()))
-        finally:
-            os.close(lock_fd)
-            # 清理锁文件
+        lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+
+        # 获得锁后再次检查(双重检查锁定模式)
+        if os.path.exists(sync_flag_file):
             try:
-                os.remove(lock_file)
+                file_mtime = os.path.getmtime(sync_flag_file)
+                if time.time() - file_mtime < 3600:
+                    return
             except:
                 pass
+
+        # 执行同步
+        sync_env_to_database()
+
+        # 创建标记文件
+        with open(sync_flag_file, 'w') as f:
+            f.write(str(os.getpid()))
+
     except FileExistsError:
         # 其他Worker正在执行同步,等待完成
         max_wait = 10  # 最多等待10秒
         waited = 0
-        while waited < max_wait and not os.path.exists(sync_flag_file):
+        while waited < max_wait:
+            if os.path.exists(sync_flag_file):
+                # 同步已完成
+                return
             time.sleep(0.1)
             waited += 0.1
+
     except Exception as e:
         # 如果文件锁不可用,降级为进程级别的检查
         global _sync_done
         if not _sync_done:
             sync_env_to_database()
             _sync_done = True
+    finally:
+        # 清理锁文件
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+                os.remove(lock_file)
+            except:
+                pass
 
 _sync_done = False  # 降级方案的备用标记
 

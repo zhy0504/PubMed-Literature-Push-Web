@@ -92,11 +92,11 @@ services:
     image: cjlapao/rq-dashboard:latest
     container_name: pubmed-rq-dashboard
     ports:
-      - "9181:8000"
+      - "9181:9181"
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - USERNAME=${RQ_DASHBOARD_USER:-admin}
-      - PASSWORD=${RQ_DASHBOARD_PASS:-admin123}
+      - RQ_DASHBOARD_REDIS_URL=redis://redis:6379/0
+      - RQ_DASHBOARD_USERNAME=${RQ_DASHBOARD_USER:-admin}
+      - RQ_DASHBOARD_PASSWORD=${RQ_DASHBOARD_PASS:-admin123}
     depends_on:
       - redis
     restart: unless-stopped

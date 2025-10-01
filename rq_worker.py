@@ -60,7 +60,28 @@ def main():
         # 测试Redis连接
         redis_conn.ping()
         logger.info("Redis连接正常")
-        
+
+        # 清理可能存在的同名 Worker 注册信息
+        try:
+            # 检查是否存在同名 Worker
+            worker_key = f'rq:worker:{worker_name}'
+            if redis_conn.exists(worker_key):
+                logger.warning(f"检测到已存在的 Worker 注册: {worker_name}，正在清理...")
+                # 从 workers 集合中移除
+                redis_conn.srem('rq:workers', worker_key)
+                # 删除相关键
+                keys_to_delete = [
+                    worker_key,
+                    f'{worker_key}:birth',
+                    f'{worker_key}:started',
+                    f'{worker_key}:current_job'
+                ]
+                for key in keys_to_delete:
+                    redis_conn.delete(key)
+                logger.info(f"已清理旧的 Worker 注册信息: {worker_name}")
+        except Exception as e:
+            logger.warning(f"清理旧 Worker 注册失败（忽略）: {e}")
+
         # 创建Worker
         with Connection(redis_conn):
             worker = Worker(queues, name=worker_name)

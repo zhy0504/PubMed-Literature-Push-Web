@@ -83,11 +83,16 @@ if [ "$RQ_MODE" = "enabled" ]; then
         fi
     fi
 
-    # 清理环境变量同步标记（容器重启时强制重新同步）
-    ENV_SYNC_FLAG="/app/data/env_sync_done"
-    if [ -f "$ENV_SYNC_FLAG" ]; then
-        echo "[同步] 检测到环境变量同步标记，删除以触发重新同步"
-        rm -f "$ENV_SYNC_FLAG"
+    # 清理环境变量同步标记（仅主应用容器，容器重启时强制重新同步）
+    # Worker容器不应删除标记，避免与主应用竞争
+    if [ -z "$RQ_WORKER_NAME" ]; then
+        ENV_SYNC_FLAG="/app/data/env_sync_done"
+        if [ -f "$ENV_SYNC_FLAG" ]; then
+            echo "[同步] 检测到环境变量同步标记，删除以触发重新同步"
+            rm -f "$ENV_SYNC_FLAG"
+        fi
+    else
+        echo "[同步] Worker容器跳过清理环境变量同步标记"
     fi
 
     # 测试RQ配置

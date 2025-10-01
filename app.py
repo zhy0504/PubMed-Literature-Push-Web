@@ -1872,7 +1872,9 @@ def shutdown_scheduler_safely():
     try:
         if scheduler.running:
             print("正在关闭调度器...")
-            # 停止接受新任务
+            # 先移除所有任务，防止在关闭时继续提交
+            scheduler.remove_all_jobs()
+            # 停止调度器，不等待正在执行的任务
             scheduler.shutdown(wait=False)
             print("调度器已关闭")
     except Exception as e:
@@ -1931,24 +1933,38 @@ def init_scheduler():
 def monitor_rq_scheduler():
     """监控RQ调度器状态"""
     try:
+        # 检查调度器执行器状态，避免在关闭时提交任务
+        if not scheduler.running:
+            return
+
+        # 检查执行器线程池是否已关闭
+        if hasattr(scheduler, '_executors'):
+            for executor in scheduler._executors.values():
+                if hasattr(executor, '_pool') and hasattr(executor._pool, '_shutdown'):
+                    if executor._pool._shutdown:
+                        return  # 执行器已关闭，停止执行
+
         # 检查Redis连接
         redis_conn.ping()
-        
+
         # 检查RQ队列状态
         queue_info = get_queue_info()
-        
+
         # 记录队列状态
         log_activity('INFO', 'rq_monitor',
             f'RQ队列状态 - 高优先级:{queue_info["high"]["length"]}, '
             f'默认:{queue_info["default"]["length"]}, '
             f'低优先级:{queue_info["low"]["length"]}, '
             f'定时任务:{queue_info["total_scheduled"]}')
-            
+
         # 检查失败任务数量
         failed_jobs = get_failed_jobs()
         if len(failed_jobs) > 0:
             log_activity('WARNING', 'rq_monitor', f'发现 {len(failed_jobs)} 个失败任务')
-            
+
+    except (RuntimeError, AttributeError):
+        # 调度器正在关闭，静默返回
+        return
     except Exception as e:
         log_activity('ERROR', 'rq_monitor', f'RQ监控异常: {e}')
         print(f"[RQ监控] 异常: {e}")
@@ -5418,10 +5434,23 @@ def index():
     if current_user.is_authenticated:
         test_sub_id = request.args.get('test_subscription_id')
         if test_sub_id:
-            test_subscription = Subscription.query.filter_by(
+            subscription_obj = Subscription.query.filter_by(
                 id=int(test_sub_id),
                 user_id=current_user.id
             ).first()
+
+            # 转换为可序列化的字典
+            if subscription_obj:
+                test_subscription = {
+                    'id': subscription_obj.id,
+                    'keywords': subscription_obj.keywords,
+                    'jcr_quartiles': subscription_obj.jcr_quartiles,  # JCR分区JSON字符串
+                    'min_impact_factor': subscription_obj.min_impact_factor,
+                    'cas_categories': subscription_obj.cas_categories,  # 中科院分区JSON字符串
+                    'cas_top_only': subscription_obj.cas_top_only,
+                    'exclude_no_issn': subscription_obj.exclude_no_issn,
+                    'search_days': subscription_obj.days_back  # 注意字段名是days_back
+                }
 
     # 处理搜索请求
     if request.method == 'POST' and current_user.is_authenticated:
@@ -5878,13 +5907,24 @@ def get_index_template():
 
             // 填充JCR分区
             if (subscription.jcr_quartiles) {
-                var jcrQuartiles = subscription.jcr_quartiles.split(',');
-                jcrQuartiles.forEach(function(quartile) {
-                    var checkbox = form.querySelector('input[name="jcr_quartile"][value="' + quartile.trim() + '"]');
-                    if (checkbox) {
-                        checkbox.checked = true;
-                    }
-                });
+                try {
+                    var jcrQuartiles = JSON.parse(subscription.jcr_quartiles);
+                    jcrQuartiles.forEach(function(quartile) {
+                        var checkbox = form.querySelector('input[name="jcr_quartile"][value="' + quartile.trim() + '"]');
+                        if (checkbox) {
+                            checkbox.checked = true;
+                        }
+                    });
+                } catch(e) {
+                    // 兼容旧格式：逗号分隔的字符串
+                    var jcrQuartiles = subscription.jcr_quartiles.split(',');
+                    jcrQuartiles.forEach(function(quartile) {
+                        var checkbox = form.querySelector('input[name="jcr_quartile"][value="' + quartile.trim() + '"]');
+                        if (checkbox) {
+                            checkbox.checked = true;
+                        }
+                    });
+                }
             }
 
             // 填充最小影响因子
@@ -5897,13 +5937,24 @@ def get_index_template():
 
             // 填充中科院分区
             if (subscription.cas_categories) {
-                var casCategories = subscription.cas_categories.split(',');
-                casCategories.forEach(function(category) {
-                    var checkbox = form.querySelector('input[name="zky_category"][value="' + category.trim() + '"]');
-                    if (checkbox) {
-                        checkbox.checked = true;
-                    }
-                });
+                try {
+                    var casCategories = JSON.parse(subscription.cas_categories);
+                    casCategories.forEach(function(category) {
+                        var checkbox = form.querySelector('input[name="zky_category"][value="' + category.trim() + '"]');
+                        if (checkbox) {
+                            checkbox.checked = true;
+                        }
+                    });
+                } catch(e) {
+                    // 兼容旧格式：逗号分隔的字符串
+                    var casCategories = subscription.cas_categories.split(',');
+                    casCategories.forEach(function(category) {
+                        var checkbox = form.querySelector('input[name="zky_category"][value="' + category.trim() + '"]');
+                        if (checkbox) {
+                            checkbox.checked = true;
+                        }
+                    });
+                }
             }
 
             // 填充Top期刊筛选

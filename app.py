@@ -5814,10 +5814,84 @@ def get_index_template():
                                     <p class="mb-0 small">上述统计结果已根据您选择的期刊质量条件进行筛选。订阅后将按相同条件推送符合要求的最新文献。</p>
                                 </div>
                                 {% endif %}
-                                
+
+                                <!-- 智能订阅建议 -->
+                                {% if search_results.count > 0 %}
+                                <div class="alert alert-light border mt-3">
+                                    <h6><i class="fas fa-lightbulb text-warning"></i> 智能订阅建议</h6>
+
+                                    {% set reached_limit = search_results.count >= search_results.max_searched %}
+                                    {% set near_limit = search_results.count >= search_results.max_searched * 0.8 %}
+
+                                    {% if reached_limit %}
+                                        <p class="mb-2"><strong class="text-danger">文献数量达到搜索上限 ({{ search_results.count }}+篇/月)</strong></p>
+                                        <p class="mb-2"><i class="fas fa-info-circle"></i> 实际文献数可能更多，强烈建议增加筛选条件:</p>
+                                        <ul class="mb-0 small">
+                                            {% if not search_results.jcr_filter or not search_results.jcr_filter.get('quartile') %}
+                                            <li>添加 JCR Q1/Q2 分区限制</li>
+                                            {% endif %}
+                                            {% if not search_results.jcr_filter or not search_results.jcr_filter.get('min_if') %}
+                                            <li>设置最小影响因子(如 IF≥3)</li>
+                                            {% endif %}
+                                            {% if not search_results.zky_filter or not search_results.zky_filter.get('top') %}
+                                            <li>勾选"仅中科院Top期刊"</li>
+                                            {% endif %}
+                                            <li>或缩小关键词范围</li>
+                                        </ul>
+
+                                    {% elif near_limit %}
+                                        <p class="mb-2"><strong class="text-warning">文献数量较多 ({{ search_results.count }}篇/月)</strong></p>
+                                        <p class="mb-2">接近搜索上限，建议增加筛选条件以获得更精准的推送:</p>
+                                        <ul class="mb-0 small">
+                                            {% if not search_results.jcr_filter or not search_results.jcr_filter.get('quartile') %}
+                                            <li>添加 JCR Q1/Q2 分区限制</li>
+                                            {% endif %}
+                                            {% if not search_results.jcr_filter or not search_results.jcr_filter.get('min_if') %}
+                                            <li>设置最小影响因子</li>
+                                            {% endif %}
+                                            <li>或优化关键词以缩小范围</li>
+                                        </ul>
+
+                                    {% elif search_results.count >= 50 %}
+                                        <p class="mb-1"><i class="fas fa-check-circle text-success"></i> 文献数量适中，建议 <strong class="text-success">每日推送</strong></p>
+                                        <small class="text-muted">预计平均每天推送 {{ "%.1f"|format(search_results.count / 30) }} 篇文献</small>
+
+                                    {% elif search_results.count >= 25 %}
+                                        <p class="mb-1"><i class="fas fa-check-circle text-success"></i> 文献数量适中，建议 <strong class="text-success">每周推送</strong></p>
+                                        <small class="text-muted">预计平均每周推送 {{ (search_results.count * 7 / 30)|round|int }} 篇文献</small>
+
+                                    {% elif search_results.count >= 10 %}
+                                        <p class="mb-1"><i class="fas fa-check-circle text-success"></i> 文献数量适中，建议 <strong class="text-success">每月推送</strong></p>
+                                        <small class="text-muted">预计每月推送 {{ search_results.count }} 篇文献</small>
+
+                                    {% elif search_results.count >= 3 %}
+                                        <p class="mb-2"><i class="fas fa-exclamation-triangle text-warning"></i> <strong class="text-warning">文献数量偏少 ({{ search_results.count }}篇/月)</strong></p>
+                                        <p class="mb-1">建议: <strong>每月推送</strong> 或优化搜索策略</p>
+                                        <ul class="mb-0 small">
+                                            {% if search_results.jcr_filter and search_results.jcr_filter.get('min_if') %}
+                                            <li>降低影响因子要求(当前 IF≥{{ search_results.jcr_filter.min_if }})</li>
+                                            {% endif %}
+                                            {% if search_results.jcr_filter and search_results.jcr_filter.get('quartile') %}
+                                            <li>扩大JCR分区范围(当前仅 {{ ', '.join(search_results.jcr_filter.quartile) }})</li>
+                                            {% endif %}
+                                            <li>扩展关键词范围</li>
+                                        </ul>
+
+                                    {% else %}
+                                        <p class="mb-2"><i class="fas fa-exclamation-circle text-danger"></i> <strong class="text-danger">文献数量过少 ({{ search_results.count }}篇/月)</strong></p>
+                                        <p class="mb-1">建议优化搜索策略:</p>
+                                        <ul class="mb-0 small">
+                                            <li>更换更通用的主题词</li>
+                                            <li>移除所有筛选条件重新搜索</li>
+                                            <li>考虑扩大研究领域范围</li>
+                                        </ul>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
+
                                 <div class="text-center">
                                     <p class="text-muted mb-0">
-                                        <i class="fas fa-info-circle"></i> 
+                                        <i class="fas fa-info-circle"></i>
                                         这是文献数量统计结果。如需查看具体文献详情，请使用订阅功能接收推送。
                                     </p>
                                 </div>

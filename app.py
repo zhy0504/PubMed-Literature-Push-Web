@@ -1887,11 +1887,11 @@ def init_scheduler():
 
         # 检查Redis连接
         redis_conn.ping()
-        print("✅ Redis连接正常")
+        print("[OK] Redis连接正常")
 
         # RQ原生调度已通过Worker --with-scheduler启用
         # 不再需要单独的调度器对象
-        print("✅ RQ原生调度器通过Worker --with-scheduler运行")
+        print("[OK] RQ原生调度器通过Worker --with-scheduler运行")
 
         # 注意: 批量调度不在这里执行,避免循环导入
         # 需要手动执行: python /app/init_rq_schedules.py
@@ -1909,10 +1909,10 @@ def init_scheduler():
                 max_instances=1
             )
             scheduler.start()
-            print("✅ APScheduler监控任务已启动")
+            print("[OK] APScheduler监控任务已启动")
             
     except Exception as e:
-        print(f"❌ RQ调度器初始化失败: {e}")
+        print(f"[ERROR] RQ调度器初始化失败: {e}")
         # 降级到原APScheduler
         fallback_to_apscheduler()
 
@@ -1943,7 +1943,7 @@ def monitor_rq_scheduler():
 
 def fallback_to_apscheduler():
     """降级到原APScheduler调度"""
-    print("⚠️ 降级到APScheduler调度...")
+    print("[WARN] 降级到APScheduler调度...")
     try:
         if scheduler.running:
             print("APScheduler已运行，跳过重复初始化")
@@ -1991,11 +1991,11 @@ def fallback_to_apscheduler():
         # 启动调度器
         if not scheduler.running:
             scheduler.start()
-            print(f"✅ APScheduler启动成功: {job_name}")
-            print("✅ 调度器心跳监控已启动")
+            print(f"[OK] APScheduler启动成功: {job_name}")
+            print("[OK] 调度器心跳监控已启动")
         
     except Exception as e:
-        print(f"❌ APScheduler降级失败: {e}")
+        print(f"[ERROR] APScheduler降级失败: {e}")
         import traceback
         traceback.print_exc()
         
@@ -2690,20 +2690,25 @@ class AIService:
             client = self.create_openai_client(provider)
             if not client:
                 return []
-            
+
+            # 获取提示词模板（从数据库）
+            prompt_template = AIPromptTemplate.get_default_prompt('translator')
+            if not prompt_template:
+                prompt_template = self.default_translation_prompt
+
             # 构建批量翻译的提示词
             abstracts_text = ""
             for i, article in enumerate(articles, 1):
                 abstracts_text += f"[摘要{i}]\n{article.abstract}\n\n"
-            
+
             batch_prompt = f"""你是一个专业的医学文献翻译专家。请将以下{len(articles)}篇英文摘要翻译成中文。
 
-要求：
-1. 保持专业术语的准确性
-2. 语言流畅自然
-3. 保持原文的逻辑结构
-4. 按照[摘要1]、[摘要2]的格式返回翻译结果
-5. 每个翻译结果之间用"---"分隔
+翻译要求：
+{prompt_template}
+
+输出格式要求：
+1. 按照[摘要1]、[摘要2]的格式返回翻译结果
+2. 每个翻译结果之间用"---"分隔
 
 请翻译以下摘要：
 
@@ -2919,18 +2924,24 @@ class AIService:
                     batch_content.append(f"摘要：{abstract}")
                     batch_content.append("")  # 空行分隔
                 
-                # 获取简介提示词模板
+                # 获取简介提示词模板（从数据库）
                 prompt_template = self.get_brief_intro_prompt()
-                
-                # 修改提示词支持批量处理
-                batch_prompt = f"""请为以下 {len(batch)} 篇医学文献分别生成一句话简介，要求：
-1. 简洁明了，每个简介不超过50个中文字符
-2. 突出文献的核心发现或方法
-3. 使用通俗易懂的语言，避免过于复杂的医学术语
-4. 按顺序返回，格式为：简介1|简介2|简介3...（用|分隔）
-5. 只返回简介内容，不要其他文字
 
-{chr(10).join(batch_content)}"""
+                # 构建批量提示词，使用数据库模板的要求
+                batch_articles_text = chr(10).join(batch_content)
+                batch_prompt = f"""请为以下 {len(batch)} 篇医学文献分别生成简介。
+
+简介要求：
+{prompt_template}
+
+输出格式要求：
+- 按文献顺序生成 {len(batch)} 个简介
+- 每个简介用 | 分隔（不要换行、不要序号）
+- 格式示例：简介1内容|简介2内容|简介3内容
+- 只输出简介内容，不要其他文字
+
+文献列表：
+{batch_articles_text}"""
                 
                 try:
                     # 调用AI API进行批量生成
@@ -2945,12 +2956,13 @@ class AIService:
                             {"role": "system", "content": "你是一个专业的医学文献分析助手。"},
                             {"role": "user", "content": batch_prompt}
                         ],
-                        max_tokens=2048,
                         temperature=0.3
                     )
-                    
+
                     batch_result = response.choices[0].message.content.strip()
-                    
+                    app.logger.info(f"批次 {i//batch_size + 1} AI返回内容长度: {len(batch_result)}")
+                    app.logger.debug(f"批次 {i//batch_size + 1} AI完整返回:\n{batch_result}")
+
                     # 解析批量结果
                     brief_intros = self._parse_batch_brief_intro_result(batch_result, len(batch))
                     
@@ -2989,24 +3001,40 @@ class AIService:
     def _parse_batch_brief_intro_result(self, result_text, expected_count):
         """解析批量简介生成结果"""
         try:
+            app.logger.info(f"开始解析批量简介结果，原始文本长度: {len(result_text)}")
+            app.logger.debug(f"原始返回内容前200字符: {result_text[:200]}")
+
             # 按|分隔
             intros = result_text.split('|')
-            
+            app.logger.info(f"按|分隔后得到 {len(intros)} 个片段，期望 {expected_count} 个")
+
             # 清理和验证结果
             cleaned_intros = []
-            for intro in intros:
+            for idx, intro in enumerate(intros):
                 intro = intro.strip()
                 if intro:
-                    # 移除可能的序号前缀
-                    intro = re.sub(r'^[简介]*\d+[：:：]\s*', '', intro)
-                    cleaned_intros.append(intro)
-            
+                    # 移除多种可能的序号前缀格式
+                    # 匹配: "简介1"、"简介1："、"1:"、"1."、"1、" 等
+                    intro = re.sub(r'^[简介]*\d+[：:：\.\、]\s*', '', intro)
+                    intro = re.sub(r'^简介\d+\s*$', '', intro)  # 移除纯占位符如"简介1"
+                    intro = intro.strip()
+
+                    # 只添加非空内容
+                    if intro and not re.match(r'^简介\d+$', intro):
+                        cleaned_intros.append(intro)
+                        app.logger.debug(f"简介{idx+1}: {intro[:50]}...")
+                    else:
+                        app.logger.warning(f"跳过无效简介片段{idx+1}: '{intro}'")
+                        cleaned_intros.append("")  # 添加空字符串占位
+
+            app.logger.info(f"清理后得到 {len([x for x in cleaned_intros if x])} 个有效简介")
+
             # 确保返回期望数量的结果
             while len(cleaned_intros) < expected_count:
                 cleaned_intros.append("")
-            
+
             return cleaned_intros[:expected_count]
-            
+
         except Exception as e:
             app.logger.error(f"解析批量简介结果失败: {str(e)}")
             return [""] * expected_count
@@ -4989,7 +5017,7 @@ def sync_env_to_database():
                     print(f"[同步] {key}: 环境变量={env_value}, 数据库={current_value}")
                     if current_value != env_value:
                         SystemSetting.set_setting(key, env_value, desc_map.get(key, ''), 'pubmed')
-                        print(f"[同步] ✓ 已更新 {key}")
+                        print(f"[同步] 已更新 {key}")
                         app.logger.info(f"已从环境变量同步配置: {key} = {env_value}")
                     else:
                         print(f"[同步] - {key} 无需更新（值相同）")
@@ -5013,7 +5041,7 @@ def sync_env_to_database():
                     new_provider.set_encrypted_api_key(openai_api_key)
                     db.session.add(new_provider)
                     db.session.commit()
-                    print(f"[同步] ✓ 已创建 OpenAI 配置: {openai_api_base}")
+                    print(f"[同步] 已创建 OpenAI 配置: {openai_api_base}")
                     app.logger.info(f"已从环境变量创建 OpenAI 配置: {openai_api_base}")
                     
                     # 自动获取并创建模型列表
@@ -5039,12 +5067,12 @@ def sync_env_to_database():
                                     db.session.add(new_model)
                             
                             db.session.commit()
-                            print(f"[同步] ✓ 自动创建了 {len(models)} 个AI模型")
+                            print(f"[同步] 自动创建了 {len(models)} 个AI模型")
                             app.logger.info(f"自动创建了 {len(models)} 个AI模型")
                         else:
-                            print(f"[同步] ⚠ 未能获取到模型列表，请手动刷新")
+                            print(f"[同步] [WARN] 未能获取到模型列表，请手动刷新")
                     except Exception as e:
-                        print(f"[同步] ⚠ 自动获取模型失败: {e}")
+                        print(f"[同步] [WARN] 自动获取模型失败: {e}")
                         app.logger.warning(f"自动获取AI模型失败: {e}")
                 else:
                     print(f"[同步] - OpenAI 配置已存在，跳过创建")
@@ -8803,7 +8831,7 @@ def admin_push():
                             <p class="text-muted">清除所有用户的推送记录，用于测试时重新推送相同文章</p>
                             <form method="POST" action="/admin/push/clear-all" style="display: inline;">
                                 <button type="submit" class="btn btn-warning" 
-                                        onclick="return confirm('⚠️ 警告：这将清除所有用户的推送记录！\\n\\n清除后，之前推送过的文章会重新推送给用户。\\n\\n确定要继续吗？')">
+                                        onclick="return confirm('[WARN] 警告：这将清除所有用户的推送记录！\\n\\n清除后，之前推送过的文章会重新推送给用户。\\n\\n确定要继续吗？')">
                                     <i class="fas fa-trash-alt"></i> 清除所有记录
                                 </button>
                             </form>
@@ -11291,7 +11319,7 @@ if __name__ == '__main__':
                 print(f"错误：Article模型缺少字段: {missing_fields}")
                 print("请检查模型定义...")
             else:
-                print("✓ Article模型包含所有必需字段")
+                print("Article模型包含所有必需字段")
         
         # 删除现有数据库文件以确保完全重新创建
         import os
@@ -11303,7 +11331,7 @@ if __name__ == '__main__':
         # 创建所有表
         print("创建数据库表...")
         db.create_all()
-        print("✓ 数据库表创建完成")
+        print("数据库表创建完成")
         
         # 验证创建的表结构
         from sqlalchemy import inspect
@@ -11314,7 +11342,7 @@ if __name__ == '__main__':
         
         for field in required_fields:
             if field in actual_columns:
-                print(f"✓ {field} 字段存在")
+                print(f"[OK] {field} 字段存在")
             else:
                 print(f"✗ {field} 字段缺失")
         
@@ -11454,7 +11482,7 @@ if __name__ == '__main__':
         
         # 添加详细的表结构验证和调试输出
         print("\n" + "="*60)
-        print("📊 数据库表结构详细验证报告")
+        print("[数据库验证] 数据库表结构详细验证报告")
         print("="*60)
         
         try:
@@ -11491,18 +11519,18 @@ if __name__ == '__main__':
                 all_present = True
                 for field, desc in ai_fields.items():
                     if field in actual_columns:
-                        print(f"     ✅ {field:15s} : 存在 ({desc})")
+                        print(f"     [OK] {field:15s} : 存在 ({desc})")
                     else:
-                        print(f"     ❌ {field:15s} : 缺失 ({desc})")
+                        print(f"     [ERROR] {field:15s} : 缺失 ({desc})")
                         all_present = False
                         
                 if all_present:
                     print(f"\n🎉 Article表结构完整！所有AI功能字段都存在")
                 else:
-                    print(f"\n⚠️  Article表存在缺失字段，可能影响AI功能")
+                    print(f"\n[WARN]  Article表存在缺失字段，可能影响AI功能")
                     
             else:
-                print("❌ Article表未找到！")
+                print("[ERROR] Article表未找到！")
             
             # 检查其他重要表的关键字段
             important_tables = {
@@ -11519,16 +11547,16 @@ if __name__ == '__main__':
                     print(f"\n📋 {table_name.capitalize()}表: {len(columns)} 个字段")
                     
                     for field in key_fields:
-                        status = "✅" if field in actual_fields else "❌"
+                        status = "[OK]" if field in actual_fields else "[ERROR]"
                         print(f"     {status} {field}")
                 else:
-                    print(f"\n❌ {table_name}表未找到")
+                    print(f"\n[ERROR] {table_name}表未找到")
                     
         except Exception as e:
-            print(f"❌ 表结构验证失败: {e}")
+            print(f"[ERROR] 表结构验证失败: {e}")
             
         print("\n" + "="*60)
-        print("📊 验证报告完成")
+        print("[验证完成] 验证报告完成")
         print("="*60 + "\n")
         
         # 初始化系统设置
@@ -11740,22 +11768,22 @@ def initialize_app():
                     if not os.path.isabs(db_path):
                         db_path = os.path.abspath(db_path)
             else:
-                print("✅ 使用非SQLite数据库，跳过文件检查")
+                print("[OK] 使用非SQLite数据库，跳过文件检查")
                 return
         
         # 检查数据库是否存在
         if not os.path.exists(db_path):
-            print(f"⚠️  数据库不存在: {db_path}")
-            print("⚠️  请先运行初始化")
+            print(f"[WARN]  数据库不存在: {db_path}")
+            print("[WARN]  请先运行初始化")
             return
         
-        print(f"✅ 数据库文件存在: {db_path}")
+        print(f"[OK] 数据库文件存在: {db_path}")
         
         # 多worker环境下的调度器恢复机制
         try:
             recover_scheduler_in_multiworker()
         except Exception as e:
-            print(f"⚠️ 调度器恢复检查失败: {e}")
+            print(f"[WARN] 调度器恢复检查失败: {e}")
 
 def recover_scheduler_in_multiworker():
     """多worker环境下的调度器恢复机制"""
@@ -11805,11 +11833,11 @@ def recover_scheduler_in_multiworker():
         print(f"[Worker {current_pid}] 尝试启动调度器...")
         init_scheduler()
         if scheduler.running:
-            print(f"[Worker {current_pid}] ✅ 调度器启动成功")
+            print(f"[Worker {current_pid}] [OK] 调度器启动成功")
             # 创建新的锁文件
             create_scheduler_lock(current_pid)
         else:
-            print(f"[Worker {current_pid}] ❌ 调度器启动失败")
+            print(f"[Worker {current_pid}] [ERROR] 调度器启动失败")
     except Exception as e:
         print(f"[Worker {current_pid}] 调度器启动异常: {e}")
 

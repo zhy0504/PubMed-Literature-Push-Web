@@ -120,6 +120,8 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 min_impact_factor REAL,
                 cas_categories TEXT,
                 cas_top_only BOOLEAN DEFAULT 0,
+                filter_config TEXT,
+                use_advanced_filter BOOLEAN DEFAULT 0,
                 push_frequency VARCHAR(20) DEFAULT 'daily',
                 push_time VARCHAR(10) DEFAULT '09:00',
                 push_day VARCHAR(10) DEFAULT 'monday',

@@ -10,15 +10,35 @@
 
 ```yaml
 旧架构 (rq-scheduler):
-  - app容器（Flask应用）
-  - worker容器（RQ Worker）
-  - scheduler容器（独立rq-scheduler进程）← 需要删除
-  - redis容器
+  开发环境:
+    - app容器（Flask应用）
+    - worker容器（RQ Worker）
+    - scheduler容器（独立rq-scheduler进程）← 需要删除
+    - redis容器
+
+  生产环境:
+    - app容器（Flask应用）
+    - worker-1容器（RQ Worker）
+    - worker-2容器（RQ Worker）
+    - scheduler容器（独立rq-scheduler进程）← 需要删除
+    - redis容器
 
 新架构 (RQ原生):
-  - app容器（Flask应用）
-  - worker容器（RQ Worker + 内置Scheduler）← 合并
-  - redis容器
+  开发环境:
+    - app容器（Flask应用）
+    - worker容器（RQ Worker + 内置Scheduler）← 合并
+    - redis容器
+
+  生产环境:
+    - app容器（Flask应用）
+    - worker-1容器（RQ Worker + 内置Scheduler）← 合并
+    - worker-2容器（RQ Worker + 内置Scheduler）← 合并，冗余备份
+    - redis容器
+
+优势:
+  ✅ 开发环境: 3容器 → 2容器（减少33%）
+  ✅ 生产环境: 5容器 → 4容器（减少20%）
+  ✅ 多Worker自动接管调度任务，无单点故障
 ```
 
 ### 2. 依赖变化

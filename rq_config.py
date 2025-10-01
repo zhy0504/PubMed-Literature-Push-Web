@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 RQ (Redis Queue) 配置和任务队列管理
-用于替代APScheduler的定时推送功能
-支持RQ Scheduler进行精确的定时任务调度
+使用RQ 1.15+ 原生调度功能，无需rq-scheduler
+支持Worker内置scheduler进行精确的定时任务调度
 """
 
 import os
 import redis
 from rq import Queue, Worker, Connection
 from rq.job import Job
+from rq.registry import ScheduledJobRegistry
 import datetime
 import logging
 from typing import Optional, List
@@ -22,39 +23,10 @@ high_priority_queue = Queue('high', connection=redis_conn)  # 高优先级：立
 default_queue = Queue('default', connection=redis_conn)     # 默认：定时推送
 low_priority_queue = Queue('low', connection=redis_conn)    # 低优先级：统计分析
 
-# 尝试导入RQ Scheduler（如果已安装）
-try:
-    from rq_scheduler import Scheduler
-    USE_RQ_SCHEDULER = True
-    scheduler = Scheduler(connection=redis_conn)
-    logging.info("✅ 使用RQ Scheduler进行任务调度")
-except ImportError:
-    USE_RQ_SCHEDULER = False
-    logging.warning("⚠️ rq-scheduler未安装，使用简化调度器。建议安装: pip install rq-scheduler")
+# 获取调度任务注册表
+scheduled_registry = ScheduledJobRegistry(queue=default_queue)
 
-    # 简化版调度器作为备用
-    class SimpleScheduler:
-        """简化版RQ调度器（备用）"""
-        def __init__(self, connection):
-            self.connection = connection
-            self.scheduled_jobs = []
-
-        def enqueue_at(self, run_at: datetime.datetime, func, *args, job_id=None, **kwargs):
-            """在指定时间执行任务"""
-            delay = (run_at - datetime.datetime.now()).total_seconds()
-            if delay > 0:
-                queue = get_queue('default')
-                return queue.enqueue_in(int(delay), func, *args, job_id=job_id, **kwargs)
-            else:
-                # 立即执行
-                queue = get_queue('high')
-                return queue.enqueue(func, *args, job_id=job_id, **kwargs)
-
-        def get_jobs(self):
-            """获取调度任务（简化实现）"""
-            return self.scheduled_jobs
-
-    scheduler = SimpleScheduler(redis_conn)
+logging.info("✅ 使用RQ原生调度功能（Worker --with-scheduler）")
 
 def get_redis_connection():
     """获取Redis连接"""
@@ -75,8 +47,9 @@ def enqueue_job(func, *args, priority='default', **kwargs):
     return queue.enqueue(func, *args, **kwargs)
 
 def enqueue_at(func, run_at: datetime.datetime, *args, priority='default', **kwargs):
-    """在指定时间执行任务"""
-    return scheduler.enqueue_at(run_at, func, *args, **kwargs)
+    """在指定时间执行任务（使用RQ原生API）"""
+    queue = get_queue(priority)
+    return queue.enqueue_at(run_at, func, *args, **kwargs)
 
 def enqueue_in(func, delay: int, *args, priority='default', **kwargs):
     """延迟指定秒数后执行任务"""
@@ -100,30 +73,29 @@ def schedule_subscription_push(subscription_id: int, run_at: datetime.datetime):
     return enqueue_at(task_func, run_at, subscription_id, job_id=job_id)
 
 def cancel_subscription_jobs(subscription_id: int):
-    """取消订阅的所有待执行任务"""
+    """取消订阅的所有待执行任务（使用RQ原生Registry）"""
     cancelled_count = 0
 
     try:
-        # 1. 取消RQ Scheduler中的调度任务
-        if USE_RQ_SCHEDULER:
-            try:
-                scheduled_jobs = list(scheduler.get_jobs())
-                for job in scheduled_jobs:
-                    if hasattr(job, 'id') and job.id.startswith(f'push_subscription_{subscription_id}_'):
-                        try:
-                            scheduler.cancel(job)
-                            cancelled_count += 1
-                            logging.info(f"已取消RQ Scheduler任务: {job.id}")
-                        except Exception as e:
-                            logging.warning(f"取消RQ Scheduler任务 {job.id} 失败: {e}")
-            except Exception as e:
-                logging.warning(f"遍历RQ Scheduler任务失败: {e}")
+        # 1. 取消scheduled_job_registry中的调度任务
+        for queue in [high_priority_queue, default_queue, low_priority_queue]:
+            registry = ScheduledJobRegistry(queue=queue)
+            for job_id in list(registry.get_job_ids()):
+                if job_id.startswith(f'push_subscription_{subscription_id}_'):
+                    try:
+                        job = Job.fetch(job_id, connection=redis_conn)
+                        job.cancel()
+                        registry.remove(job)
+                        cancelled_count += 1
+                        logging.info(f"已取消调度任务: {job_id}")
+                    except Exception as e:
+                        logging.warning(f"取消调度任务 {job_id} 失败: {e}")
 
         # 2. 取消队列中的延迟任务
         for queue in [high_priority_queue, default_queue, low_priority_queue]:
             # 获取延迟任务注册表
             registry = queue.deferred_job_registry
-            for job_id in registry.get_job_ids():
+            for job_id in list(registry.get_job_ids()):
                 if job_id.startswith(f'push_subscription_{subscription_id}_'):
                     try:
                         job = Job.fetch(job_id, connection=redis_conn)
@@ -141,31 +113,36 @@ def cancel_subscription_jobs(subscription_id: int):
         return cancelled_count
 
 def get_queue_info():
-    """获取队列状态信息"""
-    # 获取调度任务数量（兼容生成器）
-    scheduled_jobs = scheduler.get_jobs()
-    scheduled_count = len(list(scheduled_jobs)) if hasattr(scheduled_jobs, '__iter__') else 0
+    """获取队列状态信息（使用RQ原生Registry）"""
+    # 统计所有队列的scheduled任务
+    scheduled_count = 0
+    for queue in [high_priority_queue, default_queue, low_priority_queue]:
+        registry = ScheduledJobRegistry(queue=queue)
+        scheduled_count += len(registry)
 
     return {
         'high': {
             'length': len(high_priority_queue),
+            'scheduled': len(ScheduledJobRegistry(queue=high_priority_queue)),
             'deferred': len(high_priority_queue.deferred_job_registry),
             'failed': len(high_priority_queue.failed_job_registry),
             'finished': len(high_priority_queue.finished_job_registry)
         },
         'default': {
             'length': len(default_queue),
+            'scheduled': len(ScheduledJobRegistry(queue=default_queue)),
             'deferred': len(default_queue.deferred_job_registry),
             'failed': len(default_queue.failed_job_registry),
             'finished': len(default_queue.finished_job_registry)
         },
         'low': {
             'length': len(low_priority_queue),
+            'scheduled': len(ScheduledJobRegistry(queue=low_priority_queue)),
             'deferred': len(low_priority_queue.deferred_job_registry),
             'failed': len(low_priority_queue.failed_job_registry),
             'finished': len(low_priority_queue.finished_job_registry)
         },
-        'scheduled': scheduled_count
+        'total_scheduled': scheduled_count
     }
 
 def get_failed_jobs():
@@ -227,15 +204,16 @@ class RQConfig:
     """RQ配置类"""
     REDIS_URL = REDIS_URL
     QUEUES = ['high', 'default', 'low']
-    
+
     # Worker配置
     WORKER_CONNECTION_KWARGS = {'decode_responses': True}
     WORKER_TTL = 500  # 任务超时时间(秒)
     RESULT_TTL = 3600  # 结果保存时间(秒)
-    
-    # 调度器配置
-    SCHEDULER_INTERVAL = 300  # 调度器检查间隔(秒)
-    
+
+    # RQ原生调度器配置（Worker --with-scheduler）
+    # 调度器每1秒自动检查scheduled_job_registry
+    # 无需手动配置扫描间隔
+
     @classmethod
     def init_app(cls, app):
         """初始化Flask应用配置"""

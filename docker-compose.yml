@@ -1,7 +1,7 @@
 version: '3.8'
 
-# RQ版本Docker Compose配置
-# 包含Redis队列和Worker进程
+# RQ原生调度版本Docker Compose配置
+# 使用Worker内置scheduler，无需独立scheduler容器
 
 services:
   # Redis服务
@@ -52,7 +52,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # RQ Worker进程
+  # RQ Worker进程（内置Scheduler）
   worker:
     build: .
     container_name: pubmed-rq-worker
@@ -79,39 +79,6 @@ services:
       redis:
         condition: service_healthy
       app:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import redis; redis.Redis.from_url('redis://redis:6379/0').ping()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # RQ Scheduler进程
-  scheduler:
-    build: .
-    container_name: pubmed-rq-scheduler
-    command: python /app/rq_scheduler_runner.py
-    env_file:
-      - .env
-    environment:
-      # 数据库配置
-      - DATABASE_URL=sqlite:////app/data/pubmed_app.db
-      # Redis配置
-      - REDIS_URL=redis://redis:6379/0
-      # Scheduler配置
-      - RQ_SCHEDULER_NAME=pubmed-scheduler-docker
-      # RQ_SCHEDULER_INTERVAL 已移除，从数据库读取 push_check_frequency
-      # 时区配置
-      - TZ=${TZ:-Asia/Shanghai}
-      # 日志配置
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - LOG_FILE=/app/logs/rq_scheduler.log
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-    depends_on:
-      redis:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:

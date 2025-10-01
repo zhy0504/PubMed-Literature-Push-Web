@@ -5445,16 +5445,19 @@ def index():
     if current_user.is_authenticated and request.method == 'GET':
         test_sub_id = request.args.get('test_subscription_id')
         if test_sub_id:
-            # 使用服务器端session防止重复加载
+            # 使用时间戳防止短时间内重复加载（而不是永久标记）
+            import time
             session_key = f'test_sub_loaded_{test_sub_id}_{current_user.id}'
+            last_load_time = session.get(session_key, 0)
+            current_time = time.time()
 
-            # 如果已经加载过这个测试订阅，直接重定向到首页清除URL参数
-            if session.get(session_key):
-                app.logger.info(f"测试订阅 {test_sub_id} 已处理，重定向到首页")
+            # 如果在30秒内已经加载过，直接重定向清除URL参数
+            if current_time - last_load_time < 30:
+                app.logger.info(f"测试订阅 {test_sub_id} 在30秒内重复访问，重定向到首页")
                 return redirect(url_for('index'))
 
-            # 标记为已加载（只在首次GET请求时标记）
-            session[session_key] = True
+            # 标记当前加载时间（30秒后自动失效）
+            session[session_key] = current_time
 
             subscription_obj = Subscription.query.filter_by(
                 id=int(test_sub_id),

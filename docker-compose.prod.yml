@@ -1,5 +1,3 @@
-version: '3.8'
-
 # 生产环境Docker Compose配置 - 优化版
 # 特性: 多Worker、健康检查、资源限制、日志管理、网络隔离
 # 注意: Nginx反向代理在宿主机或独立服务器上配置，不包含在此编排中
@@ -222,6 +220,3 @@ volumes:
 networks:
   pubmed-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16

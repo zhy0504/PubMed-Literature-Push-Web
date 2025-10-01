@@ -5216,12 +5216,16 @@ def before_request_sync():
             except:
                 pass
 
+        # 立即创建标记文件(防止其他Worker在同步期间获取锁)
+        with open(sync_flag_file, 'w') as f:
+            f.write(f"{os.getpid()}_syncing")
+
         # 执行同步
         sync_env_to_database()
 
-        # 创建标记文件
+        # 更新标记文件为完成状态
         with open(sync_flag_file, 'w') as f:
-            f.write(str(os.getpid()))
+            f.write(f"{os.getpid()}_done")
 
     except FileExistsError:
         # 其他Worker正在执行同步,等待完成

@@ -946,6 +946,48 @@ class PasswordResetToken(db.Model):
         self.used = True
         db.session.commit()
 
+# 邀请码模型
+class InviteCode(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), unique=True, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    max_uses = db.Column(db.Integer, default=1)  # 最大使用次数
+    used_count = db.Column(db.Integer, default=0)  # 已使用次数
+    is_active = db.Column(db.Boolean, default=True)
+
+    creator = db.relationship('User', backref='created_invite_codes', foreign_keys=[created_by])
+
+    def is_expired(self):
+        """检查是否已过期"""
+        if self.expires_at:
+            return beijing_now() > self.expires_at
+        return False
+
+    def can_be_used(self):
+        """检查是否可用"""
+        return (self.is_active and
+                not self.is_expired() and
+                self.used_count < self.max_uses)
+
+    def mark_as_used(self):
+        """标记为已使用一次"""
+        self.used_count += 1
+        if self.used_count >= self.max_uses:
+            self.is_active = False
+        db.session.commit()
+
+# 邀请码使用记录模型
+class InviteCodeUsage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    invite_code_id = db.Column(db.Integer, db.ForeignKey('invite_code.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    used_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    invite_code = db.relationship('InviteCode', backref='usage_records')
+    user = db.relationship('User', backref='invite_code_usage')
+
 # 系统设置模型
 class SystemSetting(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -6649,23 +6691,66 @@ def subscribe():
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
+    # 检查是否启用邀请码注册
+    require_invite = SystemSetting.get_setting('require_invite_code', 'false') == 'true'
+
     if request.method == 'POST':
         email = request.form.get('email')
         password = request.form.get('password')
-        
+        invite_code = request.form.get('invite_code', '').strip()
+
         if User.query.filter_by(email=email).first():
             flash('邮箱已存在')
             return redirect(url_for('register'))
-        
-        user = User(email=email)
-        user.set_password(password)
-        db.session.add(user)
-        db.session.commit()
-        
-        log_activity('INFO', 'auth', f'用户注册成功: {email}', user.id, request.remote_addr)
-        flash('注册成功！请登录')
-        return redirect(url_for('login'))
-    
+
+        # 如果启用邀请码,则验证邀请码
+        if require_invite:
+            if not invite_code:
+                flash('请输入邀请码')
+                return redirect(url_for('register'))
+
+            code_obj = InviteCode.query.filter_by(code=invite_code).first()
+            if not code_obj:
+                flash('邀请码不存在')
+                log_activity('WARNING', 'auth', f'注册失败 - 邀请码不存在: {invite_code}', None, request.remote_addr)
+                return redirect(url_for('register'))
+
+            if not code_obj.can_be_used():
+                if code_obj.is_expired():
+                    flash('邀请码已过期')
+                elif code_obj.used_count >= code_obj.max_uses:
+                    flash('邀请码已达到最大使用次数')
+                else:
+                    flash('邀请码无效')
+                log_activity('WARNING', 'auth', f'注册失败 - 邀请码无效: {invite_code}', None, request.remote_addr)
+                return redirect(url_for('register'))
+
+        try:
+            user = User(email=email)
+            user.set_password(password)
+            db.session.add(user)
+            db.session.flush()  # 获取user.id
+
+            # 如果使用了邀请码,记录使用记录
+            if require_invite and code_obj:
+                code_obj.mark_as_used()
+                usage = InviteCodeUsage(
+                    invite_code_id=code_obj.id,
+                    user_id=user.id
+                )
+                db.session.add(usage)
+
+            db.session.commit()
+
+            log_activity('INFO', 'auth', f'用户注册成功: {email}', user.id, request.remote_addr)
+            flash('注册成功！请登录')
+            return redirect(url_for('login'))
+        except Exception as e:
+            db.session.rollback()
+            log_activity('ERROR', 'auth', f'注册失败: {email} - {str(e)}', None, request.remote_addr)
+            flash(f'注册失败: {str(e)}')
+            return redirect(url_for('register'))
+
     template = """
     <!DOCTYPE html>
     <html>
@@ -6681,6 +6766,13 @@ def register():
                     <div class="card">
                         <div class="card-header"><h4>用户注册</h4></div>
                         <div class="card-body">
+                            {% with messages = get_flashed_messages() %}
+                                {% if messages %}
+                                    {% for message in messages %}
+                                        <div class="alert alert-warning">{{ message }}</div>
+                                    {% endfor %}
+                                {% endif %}
+                            {% endwith %}
                             <form method="POST">
                                 <div class="mb-3">
                                     <label for="email" class="form-label">邮箱</label>
@@ -6690,6 +6782,13 @@ def register():
                                     <label for="password" class="form-label">密码</label>
                                     <input type="password" class="form-control" id="password" name="password" required>
                                 </div>
+                                {% if require_invite %}
+                                <div class="mb-3">
+                                    <label for="invite_code" class="form-label">邀请码 <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="invite_code" name="invite_code" required placeholder="请输入邀请码">
+                                    <div class="form-text">本站需要邀请码才能注册</div>
+                                </div>
+                                {% endif %}
                                 <button type="submit" class="btn btn-primary">注册</button>
                                 <a href="/login" class="btn btn-link">已有账户？登录</a>
                             </form>
@@ -6701,7 +6800,7 @@ def register():
     </body>
     </html>
     """
-    return render_template_string(template)
+    return render_template_string(template, require_invite=require_invite)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -8636,6 +8735,454 @@ def admin_user_subscription_settings(user_id):
         flash(f'设置订阅权限失败: {str(e)}', 'admin')
         return redirect(url_for('admin_users'))
 
+# ==================== 邀请码管理路由 ====================
+@app.route('/admin/invite-codes')
+@admin_required
+def admin_invite_codes():
+    """邀请码管理页面"""
+    invite_codes = InviteCode.query.order_by(InviteCode.created_at.desc()).all()
+
+    # 统计信息
+    stats = {
+        'total': len(invite_codes),
+        'active': len([c for c in invite_codes if c.can_be_used()]),
+        'used': len([c for c in invite_codes if c.used_count > 0]),
+        'expired': len([c for c in invite_codes if c.is_expired()])
+    }
+
+    template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>邀请码管理 - 管理后台</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    </head>
+    <body>
+        <!-- 导航栏 -->
+        <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="/admin">
+                    <i class="fas fa-user-shield"></i> PubMed Push - 管理后台
+                </a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="navbarNav">
+                    <ul class="navbar-nav ms-auto">
+                        <li class="nav-item">
+                            <a class="nav-link" href="/">
+                                <i class="fas fa-home"></i> 返回首页
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/logout">退出 ({{current_user.email}})</a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container-fluid mt-4">
+            <div class="row">
+                <!-- 侧边栏 -->
+                <div class="col-md-2">
+                    <div class="list-group">
+                        <a href="/admin" class="list-group-item list-group-item-action">
+                            <i class="fas fa-tachometer-alt"></i> 控制台
+                        </a>
+                        <a href="/admin/users" class="list-group-item list-group-item-action">
+                            <i class="fas fa-users"></i> 用户管理
+                        </a>
+                        <a class="list-group-item list-group-item-action active">
+                            <i class="fas fa-ticket-alt"></i> 邀请码管理
+                        </a>
+                        <a href="/admin/subscriptions" class="list-group-item list-group-item-action">
+                            <i class="fas fa-list"></i> 订阅管理
+                        </a>
+                    </div>
+                </div>
+
+                <!-- 主内容 -->
+                <div class="col-md-10">
+                    <nav aria-label="breadcrumb">
+                        <ol class="breadcrumb">
+                            <li class="breadcrumb-item"><a href="/admin">管理后台</a></li>
+                            <li class="breadcrumb-item active">邀请码管理</li>
+                        </ol>
+                    </nav>
+
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h2><i class="fas fa-ticket-alt"></i> 邀请码管理</h2>
+                        <a href="/admin/invite-codes/create" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> 生成邀请码
+                        </a>
+                    </div>
+
+                    {% with messages = get_flashed_messages(category_filter=['admin']) %}
+                        {% if messages %}
+                            {% for message in messages %}
+                                <div class="alert alert-info alert-dismissible fade show">
+                                    {{ message }}
+                                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                    {% endwith %}
+
+                    <!-- 统计卡片 -->
+                    <div class="row mb-4">
+                        <div class="col-md-3">
+                            <div class="card bg-primary text-white">
+                                <div class="card-body">
+                                    <h6 class="card-title">总计</h6>
+                                    <h3>{{ stats.total }}</h3>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card bg-success text-white">
+                                <div class="card-body">
+                                    <h6 class="card-title">可用</h6>
+                                    <h3>{{ stats.active }}</h3>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card bg-warning text-white">
+                                <div class="card-body">
+                                    <h6 class="card-title">已使用</h6>
+                                    <h3>{{ stats.used }}</h3>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card bg-danger text-white">
+                                <div class="card-body">
+                                    <h6 class="card-title">已过期</h6>
+                                    <h3>{{ stats.expired }}</h3>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 邀请码列表 -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5><i class="fas fa-list"></i> 邀请码列表</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>邀请码</th>
+                                            <th>创建者</th>
+                                            <th>创建时间</th>
+                                            <th>过期时间</th>
+                                            <th>使用情况</th>
+                                            <th>状态</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for code in invite_codes %}
+                                        <tr>
+                                            <td><code>{{ code.code }}</code></td>
+                                            <td>{{ code.creator.email }}</td>
+                                            <td>{{ code.created_at.strftime('%Y-%m-%d %H:%M') if code.created_at else 'N/A' }}</td>
+                                            <td>{{ code.expires_at.strftime('%Y-%m-%d %H:%M') if code.expires_at else '永久' }}</td>
+                                            <td>{{ code.used_count }}/{{ code.max_uses }}</td>
+                                            <td>
+                                                {% if code.can_be_used() %}
+                                                    <span class="badge bg-success">可用</span>
+                                                {% elif code.is_expired() %}
+                                                    <span class="badge bg-danger">已过期</span>
+                                                {% elif code.used_count >= code.max_uses %}
+                                                    <span class="badge bg-warning">已用完</span>
+                                                {% else %}
+                                                    <span class="badge bg-secondary">已禁用</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <a href="/admin/invite-codes/{{ code.id }}/usage" class="btn btn-sm btn-info" title="查看使用记录">
+                                                    <i class="fas fa-history"></i>
+                                                </a>
+                                                {% if code.is_active %}
+                                                <a href="/admin/invite-codes/{{ code.id }}/disable" class="btn btn-sm btn-warning"
+                                                   onclick="return confirm('确定要禁用此邀请码吗？')" title="禁用">
+                                                    <i class="fas fa-ban"></i>
+                                                </a>
+                                                {% else %}
+                                                <a href="/admin/invite-codes/{{ code.id }}/enable" class="btn btn-sm btn-success" title="启用">
+                                                    <i class="fas fa-check"></i>
+                                                </a>
+                                                {% endif %}
+                                                <a href="/admin/invite-codes/{{ code.id }}/delete" class="btn btn-sm btn-danger"
+                                                   onclick="return confirm('确定要删除此邀请码吗？删除后无法恢复！')" title="删除">
+                                                    <i class="fas fa-trash"></i>
+                                                </a>
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
+    </body>
+    </html>
+    """
+    return render_template_string(template, invite_codes=invite_codes, stats=stats)
+
+@app.route('/admin/invite-codes/create', methods=['GET', 'POST'])
+@admin_required
+def admin_create_invite_code():
+    """生成邀请码"""
+    if request.method == 'POST':
+        try:
+            import secrets
+            from datetime import timedelta
+
+            max_uses = int(request.form.get('max_uses', 1))
+            expire_days = request.form.get('expire_days', '')
+
+            # 生成邀请码
+            code = secrets.token_urlsafe(12)
+
+            # 计算过期时间
+            expires_at = None
+            if expire_days and int(expire_days) > 0:
+                expires_at = beijing_now() + timedelta(days=int(expire_days))
+
+            invite_code = InviteCode(
+                code=code,
+                created_by=current_user.id,
+                max_uses=max_uses,
+                expires_at=expires_at
+            )
+            db.session.add(invite_code)
+            db.session.commit()
+
+            log_activity('INFO', 'admin', f'管理员 {current_user.email} 创建邀请码: {code}', current_user.id, request.remote_addr)
+            flash(f'邀请码创建成功: {code}', 'admin')
+            return redirect(url_for('admin_invite_codes'))
+
+        except Exception as e:
+            db.session.rollback()
+            log_activity('ERROR', 'admin', f'创建邀请码失败: {str(e)}', current_user.id, request.remote_addr)
+            flash(f'创建邀请码失败: {str(e)}', 'admin')
+
+    template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>生成邀请码 - 管理后台</title>
+        <meta charset="utf-8">
+        <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    </head>
+    <body>
+        <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="/admin">
+                    <i class="fas fa-user-shield"></i> PubMed Push - 管理后台
+                </a>
+            </div>
+        </nav>
+
+        <div class="container mt-5">
+            <div class="row justify-content-center">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h4><i class="fas fa-plus"></i> 生成邀请码</h4>
+                        </div>
+                        <div class="card-body">
+                            <form method="POST">
+                                <div class="mb-3">
+                                    <label for="max_uses" class="form-label">最大使用次数</label>
+                                    <input type="number" class="form-control" id="max_uses" name="max_uses" value="1" min="1" required>
+                                    <div class="form-text">此邀请码可被使用的最大次数</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="expire_days" class="form-label">有效天数</label>
+                                    <input type="number" class="form-control" id="expire_days" name="expire_days" placeholder="留空表示永久有效" min="1">
+                                    <div class="form-text">留空表示永久有效</div>
+                                </div>
+                                <div class="d-grid gap-2">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="fas fa-check"></i> 生成邀请码
+                                    </button>
+                                    <a href="/admin/invite-codes" class="btn btn-secondary">
+                                        <i class="fas fa-arrow-left"></i> 返回列表
+                                    </a>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
+    </body>
+    </html>
+    """
+    return render_template_string(template)
+
+@app.route('/admin/invite-codes/<int:code_id>/usage')
+@admin_required
+def admin_invite_code_usage(code_id):
+    """查看邀请码使用记录"""
+    invite_code = InviteCode.query.get_or_404(code_id)
+    usage_records = InviteCodeUsage.query.filter_by(invite_code_id=code_id).order_by(InviteCodeUsage.used_at.desc()).all()
+
+    template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>邀请码使用记录 - 管理后台</title>
+        <meta charset="utf-8">
+        <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    </head>
+    <body>
+        <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="/admin">
+                    <i class="fas fa-user-shield"></i> PubMed Push - 管理后台
+                </a>
+            </div>
+        </nav>
+
+        <div class="container mt-5">
+            <div class="row justify-content-center">
+                <div class="col-md-8">
+                    <div class="card">
+                        <div class="card-header">
+                            <h4><i class="fas fa-history"></i> 邀请码使用记录</h4>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-3">邀请码:</dt>
+                                <dd class="col-sm-9"><code>{{ invite_code.code }}</code></dd>
+
+                                <dt class="col-sm-3">创建者:</dt>
+                                <dd class="col-sm-9">{{ invite_code.creator.email }}</dd>
+
+                                <dt class="col-sm-3">使用情况:</dt>
+                                <dd class="col-sm-9">{{ invite_code.used_count }}/{{ invite_code.max_uses }}</dd>
+                            </dl>
+
+                            <h5 class="mt-4">使用记录</h5>
+                            {% if usage_records %}
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>用户邮箱</th>
+                                            <th>使用时间</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for record in usage_records %}
+                                        <tr>
+                                            <td>{{ record.user.email }}</td>
+                                            <td>{{ record.used_at.strftime('%Y-%m-%d %H:%M:%S') if record.used_at else 'N/A' }}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {% else %}
+                            <p class="text-muted">暂无使用记录</p>
+                            {% endif %}
+
+                            <div class="mt-3">
+                                <a href="/admin/invite-codes" class="btn btn-secondary">
+                                    <i class="fas fa-arrow-left"></i> 返回列表
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
+    </body>
+    </html>
+    """
+    return render_template_string(template, invite_code=invite_code, usage_records=usage_records)
+
+@app.route('/admin/invite-codes/<int:code_id>/disable')
+@admin_required
+def admin_disable_invite_code(code_id):
+    """禁用邀请码"""
+    try:
+        invite_code = InviteCode.query.get_or_404(code_id)
+        invite_code.is_active = False
+        db.session.commit()
+
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 禁用邀请码: {invite_code.code}', current_user.id, request.remote_addr)
+        flash(f'邀请码已禁用', 'admin')
+    except Exception as e:
+        db.session.rollback()
+        log_activity('ERROR', 'admin', f'禁用邀请码失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'禁用失败: {str(e)}', 'admin')
+
+    return redirect(url_for('admin_invite_codes'))
+
+@app.route('/admin/invite-codes/<int:code_id>/enable')
+@admin_required
+def admin_enable_invite_code(code_id):
+    """启用邀请码"""
+    try:
+        invite_code = InviteCode.query.get_or_404(code_id)
+        invite_code.is_active = True
+        db.session.commit()
+
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 启用邀请码: {invite_code.code}', current_user.id, request.remote_addr)
+        flash(f'邀请码已启用', 'admin')
+    except Exception as e:
+        db.session.rollback()
+        log_activity('ERROR', 'admin', f'启用邀请码失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'启用失败: {str(e)}', 'admin')
+
+    return redirect(url_for('admin_invite_codes'))
+
+@app.route('/admin/invite-codes/<int:code_id>/delete')
+@admin_required
+def admin_delete_invite_code(code_id):
+    """删除邀请码"""
+    try:
+        invite_code = InviteCode.query.get_or_404(code_id)
+        code_str = invite_code.code
+
+        # 先删除相关的使用记录
+        InviteCodeUsage.query.filter_by(invite_code_id=code_id).delete()
+
+        # 删除邀请码
+        db.session.delete(invite_code)
+        db.session.commit()
+
+        log_activity('INFO', 'admin', f'管理员 {current_user.email} 删除邀请码: {code_str}', current_user.id, request.remote_addr)
+        flash(f'邀请码已删除', 'admin')
+    except Exception as e:
+        db.session.rollback()
+        log_activity('ERROR', 'admin', f'删除邀请码失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'删除失败: {str(e)}', 'admin')
+
+    return redirect(url_for('admin_invite_codes'))
+
 @app.route('/admin/subscriptions')
 @admin_required
 def admin_subscriptions():
@@ -10077,6 +10624,7 @@ def admin_system():
                 SystemSetting.set_setting('max_articles_limit', request.form.get('max_articles_limit', '1000'), '文章数量上限', 'system')
                 SystemSetting.set_setting('cleanup_articles_count', request.form.get('cleanup_articles_count', '100'), '单次清理文章数量', 'system')
                 SystemSetting.set_setting('user_registration_enabled', request.form.get('user_registration_enabled', 'true'), '允许用户注册', 'system')
+                SystemSetting.set_setting('require_invite_code', request.form.get('require_invite_code', 'false'), '需要邀请码注册', 'system')
                 flash('系统配置已保存', 'admin')
                 
             log_activity('INFO', 'admin', f'管理员 {current_user.email} 更新系统设置', current_user.id, request.remote_addr)
@@ -10093,19 +10641,20 @@ def admin_system():
         'pubmed_max_results': SystemSetting.get_setting('pubmed_max_results', '200'),
         'pubmed_timeout': SystemSetting.get_setting('pubmed_timeout', '10'),
         'pubmed_api_key': SystemSetting.get_setting('pubmed_api_key', ''),
-        
+
         # 推送配置
         'push_daily_time': SystemSetting.get_setting('push_daily_time', '09:00'),
         'push_max_articles': SystemSetting.get_setting('push_max_articles', '50'),
         'push_check_frequency': SystemSetting.get_setting('push_check_frequency', '1'),
         'push_enabled': SystemSetting.get_setting('push_enabled', 'true'),
-        
+
         # 系统配置
         'system_name': SystemSetting.get_setting('system_name', 'PubMed Literature Push'),
         'log_retention_days': SystemSetting.get_setting('log_retention_days', '30'),
         'max_articles_limit': SystemSetting.get_setting('max_articles_limit', '1000'),
         'cleanup_articles_count': SystemSetting.get_setting('cleanup_articles_count', '100'),
         'user_registration_enabled': SystemSetting.get_setting('user_registration_enabled', 'true'),
+        'require_invite_code': SystemSetting.get_setting('require_invite_code', 'false'),
     }
     
     # 获取缓存信息
@@ -10298,6 +10847,16 @@ def admin_system():
                                         </label>
                                     </div>
                                     <div class="form-text">关闭后新用户无法注册</div>
+                                </div>
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="require_invite_code" value="true"
+                                               {{ 'checked' if settings.require_invite_code == 'true' else '' }}>
+                                        <label class="form-check-label">
+                                            需要邀请码注册
+                                        </label>
+                                    </div>
+                                    <div class="form-text">开启后新用户注册需要提供有效的邀请码</div>
                                 </div>
                                 <button type="submit" class="btn btn-primary">
                                     <i class="fas fa-save"></i> 保存系统配置
@@ -12893,6 +13452,7 @@ if __name__ == '__main__':
                 ('system_name', 'PubMed Literature Push', '系统名称', 'system'),
                 ('log_retention_days', '30', '日志保留天数', 'system'),
                 ('user_registration_enabled', 'true', '允许用户注册', 'system'),
+                ('require_invite_code', 'false', '需要邀请码注册', 'system'),
                 ('max_articles_limit', '1000', '文章数量上限', 'system'),
                 ('cleanup_articles_count', '100', '单次清理文章数量', 'system'),
                 # AI功能设置

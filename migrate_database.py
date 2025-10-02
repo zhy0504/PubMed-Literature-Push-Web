@@ -4,10 +4,17 @@
 数据库迁移脚本：统一迁移脚本
 1. 为 subscription 表添加 filter_config 和 use_advanced_filter 字段
 2. 更新 user 表的 allowed_frequencies 字段（从 'weekly' 更新为 'daily,weekly,monthly'）
+3. 添加邀请码功能表（invite_code 和 invite_code_usage）
 """
 
 import sqlite3
 import os
+import sys
+
+# 设置输出编码为UTF-8（Windows兼容）
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 def migrate_database():
     """执行数据库迁移"""
@@ -38,17 +45,17 @@ def migrate_database():
         if 'filter_config' not in columns:
             print("  添加 filter_config 字段...")
             cursor.execute("ALTER TABLE subscription ADD COLUMN filter_config TEXT")
-            print("  ✓ filter_config 字段已添加")
+            print("  [OK] filter_config 字段已添加")
         else:
-            print("  ✓ filter_config 字段已存在")
+            print("  [OK] filter_config 字段已存在")
 
         # 添加 use_advanced_filter 字段
         if 'use_advanced_filter' not in columns:
             print("  添加 use_advanced_filter 字段...")
             cursor.execute("ALTER TABLE subscription ADD COLUMN use_advanced_filter BOOLEAN DEFAULT 0")
-            print("  ✓ use_advanced_filter 字段已添加")
+            print("  [OK] use_advanced_filter 字段已添加")
         else:
-            print("  ✓ use_advanced_filter 字段已存在")
+            print("  [OK] use_advanced_filter 字段已存在")
 
         # ==================== 迁移 2: 更新用户推送频率权限 ====================
         print("\n【迁移 2】更新用户推送频率权限...")
@@ -67,9 +74,77 @@ def migrate_database():
                 WHERE allowed_frequencies = 'weekly'
             """)
             updated_count = cursor.rowcount
-            print(f"  ✓ 已更新 {updated_count} 个用户的推送频率权限")
+            print(f"  [OK] 已更新 {updated_count} 个用户的推送频率权限")
         else:
-            print("  ✓ 所有用户已具有完整的推送频率权限")
+            print("  [OK] 所有用户已具有完整的推送频率权限")
+
+        # ==================== 迁移 3: 添加邀请码功能表 ====================
+        print("\n【迁移 3】添加邀请码功能表...")
+
+        # 检查 invite_code 表是否已存在
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='invite_code'
+        """)
+
+        if cursor.fetchone():
+            print("  [SKIP] invite_code 表已存在，跳过创建")
+        else:
+            # 创建 invite_code 表
+            print("  创建 invite_code 表...")
+            cursor.execute("""
+                CREATE TABLE invite_code (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code VARCHAR(50) UNIQUE NOT NULL,
+                    created_by INTEGER NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at DATETIME,
+                    max_uses INTEGER DEFAULT 1,
+                    used_count INTEGER DEFAULT 0,
+                    is_active BOOLEAN DEFAULT 1,
+                    FOREIGN KEY (created_by) REFERENCES user (id)
+                )
+            """)
+            print("  [OK] invite_code 表创建成功")
+
+        # 检查 invite_code_usage 表是否存在
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='invite_code_usage'
+        """)
+
+        if cursor.fetchone():
+            print("  [SKIP] invite_code_usage 表已存在，跳过创建")
+        else:
+            # 创建 invite_code_usage 表
+            print("  创建 invite_code_usage 表...")
+            cursor.execute("""
+                CREATE TABLE invite_code_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    invite_code_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (invite_code_id) REFERENCES invite_code (id),
+                    FOREIGN KEY (user_id) REFERENCES user (id)
+                )
+            """)
+            print("  [OK] invite_code_usage 表创建成功")
+
+        # 检查并添加系统设置
+        cursor.execute("""
+            SELECT key FROM system_setting
+            WHERE key='require_invite_code'
+        """)
+
+        if cursor.fetchone():
+            print("  [SKIP] require_invite_code 设置已存在")
+        else:
+            print("  添加 require_invite_code 系统设置...")
+            cursor.execute("""
+                INSERT INTO system_setting (key, value, description, category)
+                VALUES ('require_invite_code', 'false', '需要邀请码注册', 'system')
+            """)
+            print("  [OK] require_invite_code 设置添加成功")
 
         # 提交所有更改
         conn.commit()
@@ -94,11 +169,34 @@ def migrate_database():
         for row in cursor.fetchall():
             print(f"    {row[0]}: {row[1]} 个用户")
 
-        print("\n✅ 数据库迁移完成！")
+        # 验证邀请码表
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name IN ('invite_code', 'invite_code_usage')
+        """)
+        invite_tables = [row[0] for row in cursor.fetchall()]
+        print(f"\n  邀请码功能表:")
+        print(f"    invite_code: {'invite_code' in invite_tables}")
+        print(f"    invite_code_usage: {'invite_code_usage' in invite_tables}")
+
+        # 验证系统设置
+        cursor.execute("""
+            SELECT value FROM system_setting
+            WHERE key='require_invite_code'
+        """)
+        result = cursor.fetchone()
+        if result:
+            print(f"\n  邀请码注册设置: {result[0]} (关闭)")
+
+        print("\n[OK] 数据库迁移完成！")
+        print("\n提示:")
+        print("  - 可在管理后台'系统设置'中开启'需要邀请码注册'")
+        print("  - 在'邀请码管理'中生成邀请码")
+
         conn.close()
 
     except Exception as e:
-        print(f"\n❌ 迁移失败: {str(e)}")
+        print(f"\n[ERROR] 迁移失败: {str(e)}")
         raise
 
 if __name__ == '__main__':

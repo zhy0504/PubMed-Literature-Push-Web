@@ -262,7 +262,34 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
+
+        # 创建邀请码表
+        cursor.execute('''
+            CREATE TABLE invite_code (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code VARCHAR(50) UNIQUE NOT NULL,
+                created_by INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME,
+                max_uses INTEGER DEFAULT 1,
+                used_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (created_by) REFERENCES user (id)
+            )
+        ''')
+
+        # 创建邀请码使用记录表
+        cursor.execute('''
+            CREATE TABLE invite_code_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invite_code_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (invite_code_id) REFERENCES invite_code (id),
+                FOREIGN KEY (user_id) REFERENCES user (id)
+            )
+        ''')
+
         print("数据表创建成功！")
         
         # 生成密码哈希
@@ -347,6 +374,7 @@ def create_custom_database(admin_email, admin_password, user_email=None, user_pa
             ('system_name', 'PubMed Literature Push', '系统名称', 'system'),
             ('log_retention_days', '30', '日志保留天数', 'system'),
             ('user_registration_enabled', 'true', '允许用户注册', 'system'),
+            ('require_invite_code', 'false', '需要邀请码注册', 'system'),
         ]
         
         for key, value, desc, category in default_settings:

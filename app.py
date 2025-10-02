@@ -7698,6 +7698,7 @@ def admin_dashboard():
                         <div class="card-body">
                             <a href="/admin/users" class="btn btn-primary me-2">用户管理</a>
                             <a href="/admin/subscriptions" class="btn btn-success me-2">订阅管理</a>
+                            <a href="/admin/invite-codes" class="btn btn-info me-2">邀请码管理</a>
                             <a href="/admin/push" class="btn btn-warning me-2">推送管理</a>
                             <a href="/admin/mail" class="btn btn-info me-2">邮箱管理</a>
                             <a href="/admin/cache" class="btn btn-info me-2">L1缓存管理</a>

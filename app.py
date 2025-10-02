@@ -5686,9 +5686,7 @@ def initialize_scheduler_safely():
                     job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
                     print(f"[RQ] 批量调度任务已排队: {job.id}")
                     print(f"[RQ] 将调度 {subscription_count} 个活跃订阅到队列")
-                    # 创建标记文件，包含时间戳
-                    with open(rq_schedule_flag_file, 'w') as f:
-                        f.write(f"{os.getpid()}|{int(time.time())}")
+                    # 注意：标记文件将由Worker在任务成功后创建（tasks.py:207-210）
             except Exception as e:
                 print(f"[RQ] 批量调度订阅失败: {e}")
                 import traceback
@@ -5776,9 +5774,7 @@ def initialize_scheduler_safely():
                         print(f"[RQ] 批量调度任务已排队: {job.id}")
                         print(f"[RQ] 将调度 {subscription_count} 个活跃订阅到队列")
 
-                        # 创建RQ调度标记，包含时间戳
-                        with open(rq_schedule_flag_file, 'w') as f:
-                            f.write(f"{os.getpid()}|{int(time.time())}")
+                        # 注意：标记文件将由Worker在任务成功后创建（tasks.py:207-210）
                 else:
                     print("[调度器] APScheduler降级模式，不需要批量调度")
             except Exception as e:

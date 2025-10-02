@@ -1186,7 +1186,7 @@ class MailSender:
             # 创建邮件消息
             msg = Message(
                 subject=subject,
-                sender=config.username,
+                sender=('PubMed Literature Push', config.username),
                 recipients=[to_email]
             )
             msg.html = html_body
@@ -1664,14 +1664,18 @@ class SimpleLiteraturePushService:
     def _send_email_notification(self, user, articles, articles_by_subscription=None):
         """发送邮件通知 - 现在只处理单个订阅"""
         try:
+            # 获取当前日期
+            from datetime import datetime
+            current_date = datetime.now().strftime('%Y年%m月%d日')
+
             # 生成邮件主题，包含关键词信息
             if articles_by_subscription and len(articles_by_subscription) == 1:
                 # 获取关键词（现在总是只有一个）
                 keywords = list(articles_by_subscription.keys())[0]
-                subject = f"{keywords}文献推送-您有{len(articles)}篇新文献"
+                subject = f"{current_date} {keywords}文献推送-您有{len(articles)}篇新文献"
             else:
                 # 备用格式
-                subject = f"PubMed文献推送-您有{len(articles)}篇新文献"
+                subject = f"{current_date} PubMed文献推送-您有{len(articles)}篇新文献"
             
             # 生成邮件内容
             html_body = self._generate_email_html(user, articles, articles_by_subscription)

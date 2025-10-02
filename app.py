@@ -6697,7 +6697,17 @@ def register():
     if request.method == 'POST':
         email = request.form.get('email')
         password = request.form.get('password')
+        confirm_password = request.form.get('confirm_password')
         invite_code = request.form.get('invite_code', '').strip()
+
+        # 验证密码
+        if not password or len(password) < 6:
+            flash('密码长度至少6位')
+            return redirect(url_for('register'))
+
+        if password != confirm_password:
+            flash('两次输入的密码不一致')
+            return redirect(url_for('register'))
 
         if User.query.filter_by(email=email).first():
             flash('邮箱已存在')
@@ -6780,7 +6790,12 @@ def register():
                                 </div>
                                 <div class="mb-3">
                                     <label for="password" class="form-label">密码</label>
-                                    <input type="password" class="form-control" id="password" name="password" required>
+                                    <input type="password" class="form-control" id="password" name="password" required minlength="6">
+                                    <div class="form-text">密码长度至少6位</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="confirm_password" class="form-label">确认密码</label>
+                                    <input type="password" class="form-control" id="confirm_password" name="confirm_password" required minlength="6">
                                 </div>
                                 {% if require_invite %}
                                 <div class="mb-3">
@@ -7722,15 +7737,20 @@ def admin_add_user():
     if request.method == 'POST':
         email = request.form.get('email', '').strip()
         password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
         is_admin = request.form.get('is_admin') == 'on'
-        
+
         # 验证输入
         if not email or not password:
             flash('邮箱和密码不能为空', 'error')
             return redirect(url_for('admin_add_user'))
-        
+
         if len(password) < 6:
             flash('密码长度至少6位', 'error')
+            return redirect(url_for('admin_add_user'))
+
+        if password != confirm_password:
+            flash('两次输入的密码不一致', 'error')
             return redirect(url_for('admin_add_user'))
         
         # 检查邮箱是否已存在
@@ -7831,6 +7851,13 @@ def admin_add_user():
                                     </label>
                                     <input type="password" class="form-control" id="password" name="password" required minlength="6">
                                     <div class="form-text">密码长度至少6位</div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="confirm_password" class="form-label">
+                                        <i class="fas fa-lock"></i> 确认密码 *
+                                    </label>
+                                    <input type="password" class="form-control" id="confirm_password" name="confirm_password" required minlength="6">
                                 </div>
                                 
                                 <div class="mb-3">
@@ -8786,28 +8813,7 @@ def admin_invite_codes():
             </div>
         </nav>
 
-        <div class="container-fluid mt-4">
-            <div class="row">
-                <!-- 侧边栏 -->
-                <div class="col-md-2">
-                    <div class="list-group">
-                        <a href="/admin" class="list-group-item list-group-item-action">
-                            <i class="fas fa-tachometer-alt"></i> 控制台
-                        </a>
-                        <a href="/admin/users" class="list-group-item list-group-item-action">
-                            <i class="fas fa-users"></i> 用户管理
-                        </a>
-                        <a class="list-group-item list-group-item-action active">
-                            <i class="fas fa-ticket-alt"></i> 邀请码管理
-                        </a>
-                        <a href="/admin/subscriptions" class="list-group-item list-group-item-action">
-                            <i class="fas fa-list"></i> 订阅管理
-                        </a>
-                    </div>
-                </div>
-
-                <!-- 主内容 -->
-                <div class="col-md-10">
+        <div class="container mt-4">
                     <nav aria-label="breadcrumb">
                         <ol class="breadcrumb">
                             <li class="breadcrumb-item"><a href="/admin">管理后台</a></li>
@@ -8933,8 +8939,6 @@ def admin_invite_codes():
                             </div>
                         </div>
                     </div>
-                </div>
-            </div>
         </div>
 
         <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>

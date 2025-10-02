@@ -235,11 +235,46 @@ def test_rq_connection():
         log_activity('INFO', 'rq_test', f'RQ连接测试任务执行成功: {current_time}')
         return {"status": "success", "time": current_time.isoformat()}
 
+def batch_push_all_users():
+    """批量推送所有用户订阅（异步任务）"""
+    with app.app_context():
+        try:
+            start_time = datetime.datetime.now()
+            logging.info(f"[RQ批量推送] 开始批量推送所有用户订阅")
+
+            # 调用推送服务处理所有用户
+            results = push_service.process_user_subscriptions()
+
+            success_count = sum(1 for r in results if r.get('success'))
+            total_articles = sum(r.get('articles_found', 0) for r in results if r.get('success'))
+
+            end_time = datetime.datetime.now()
+            duration = (end_time - start_time).total_seconds()
+
+            success_msg = f'批量推送完成: 处理 {len(results)} 个用户，成功 {success_count} 个，共找到 {total_articles} 篇新文章'
+            log_activity('INFO', 'rq_batch_push', success_msg)
+            logging.info(f"[RQ批量推送] {success_msg} (耗时: {duration:.2f}秒)")
+
+            return {
+                "status": "success",
+                "total_users": len(results),
+                "success_count": success_count,
+                "total_articles": total_articles,
+                "duration": duration
+            }
+
+        except Exception as e:
+            error_msg = f"批量推送失败: {str(e)}"
+            log_activity('ERROR', 'rq_batch_push', error_msg)
+            logging.error(f"[RQ批量推送] {error_msg}")
+            return {"status": "error", "message": error_msg}
+
 if __name__ == '__main__':
     # 测试任务定义
     print("RQ任务模块加载成功")
     print("可用任务:")
     print("- process_subscription_push: 处理订阅推送")
     print("- batch_schedule_all_subscriptions: 批量调度订阅")
+    print("- batch_push_all_users: 批量推送所有用户")
     print("- immediate_push_subscription: 立即推送")
     print("- test_rq_connection: 连接测试")

@@ -11158,22 +11158,22 @@ def clear_all_articles():
 @app.route('/admin/push/trigger', methods=['POST'])
 @admin_required
 def trigger_push():
-    """手动触发推送"""
+    """手动触发推送（异步执行）"""
     try:
         log_activity('INFO', 'admin', f'管理员 {current_user.email} 手动触发推送', current_user.id, request.remote_addr)
-        
-        # 执行推送
-        results = push_service.process_user_subscriptions()
-        
-        success_count = sum(1 for r in results if r.get('success'))
-        total_articles = sum(r.get('articles_found', 0) for r in results if r.get('success'))
-        
-        flash(f'推送完成：处理了 {len(results)} 个用户，成功 {success_count} 个，共找到 {total_articles} 篇新文章', 'admin')
-        
+
+        # 使用RQ异步执行推送任务
+        from rq_config import enqueue_job
+        from tasks import batch_push_all_users
+
+        job = enqueue_job(batch_push_all_users, priority='high')
+
+        flash(f'推送任务已提交到队列（任务ID: {job.id}），请稍后查看推送记录', 'admin')
+
     except Exception as e:
-        log_activity('ERROR', 'admin', f'手动推送失败: {str(e)}', current_user.id, request.remote_addr)
-        flash(f'推送失败: {str(e)}', 'admin')
-    
+        log_activity('ERROR', 'admin', f'手动推送任务提交失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'推送任务提交失败: {str(e)}', 'admin')
+
     return redirect(url_for('admin_push'))
 
 @app.route('/admin/push/reset-scheduler', methods=['POST'])

@@ -2250,17 +2250,13 @@ def monitor_rq_scheduler():
                 os.remove(rq_schedule_flag_file)
                 print(f"[RQ监控] 已清理过期的调度标记文件")
 
-            # 触发批量调度任务
+            # 触发批量调度任务（标记文件将在任务成功后由Worker创建）
             from tasks import batch_schedule_all_subscriptions
             from rq_config import enqueue_job
             job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
 
             log_activity('INFO', 'rq_monitor', f'自动恢复批量调度任务已排队: {job.id}')
             print(f"[RQ监控] 自动恢复批量调度任务已排队: {job.id}")
-
-            # 创建新的标记文件
-            with open(rq_schedule_flag_file, 'w') as f:
-                f.write(f"{os.getpid()}|{int(time.time())}")
 
         # 检查失败任务数量
         failed_jobs = get_failed_jobs()

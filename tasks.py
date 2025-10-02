@@ -187,7 +187,7 @@ def batch_schedule_all_subscriptions():
         try:
             subscriptions = Subscription.query.filter_by(is_active=True).join(User).filter_by(is_active=True).all()
             scheduled_count = 0
-            
+
             for subscription in subscriptions:
                 try:
                     next_push_time = calculate_next_push_time(subscription)
@@ -197,16 +197,26 @@ def batch_schedule_all_subscriptions():
                         scheduled_count += 1
                 except Exception as e:
                     logging.error(f"调度订阅 {subscription.id} 失败: {e}")
-            
+
             log_activity('INFO', 'rq_schedule', f'批量调度完成: {scheduled_count}/{len(subscriptions)} 个订阅')
             logging.info(f"[RQ批量调度] 成功调度 {scheduled_count}/{len(subscriptions)} 个订阅")
-            
+
+            # 批量调度成功后创建标记文件
+            try:
+                import time
+                rq_schedule_flag_file = '/app/data/rq_schedule_init_done'
+                with open(rq_schedule_flag_file, 'w') as f:
+                    f.write(f"{os.getpid()}|{int(time.time())}")
+                logging.info(f"[RQ批量调度] 已创建调度标记文件")
+            except Exception as e:
+                logging.warning(f"[RQ批量调度] 创建标记文件失败: {e}")
+
             return {
                 "status": "success",
                 "total": len(subscriptions),
                 "scheduled": scheduled_count
             }
-            
+
         except Exception as e:
             error_msg = f"批量调度失败: {str(e)}"
             log_activity('ERROR', 'rq_schedule', error_msg)

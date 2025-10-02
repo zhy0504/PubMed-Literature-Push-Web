@@ -2184,7 +2184,7 @@ def init_scheduler():
         fallback_to_apscheduler()
 
 def monitor_rq_scheduler():
-    """监控RQ调度器状态"""
+    """监控RQ调度器状态并自动恢复丢失的调度任务"""
     try:
         # 检查调度器执行器状态，避免在关闭时提交任务
         if not scheduler.running:
@@ -2202,13 +2202,41 @@ def monitor_rq_scheduler():
 
         # 检查RQ队列状态
         queue_info = get_queue_info()
+        total_scheduled = queue_info.get('total_scheduled', 0)
 
         # 记录队列状态
         log_activity('INFO', 'rq_monitor',
             f'RQ队列状态 - 高优先级:{queue_info["high"]["length"]}, '
             f'默认:{queue_info["default"]["length"]}, '
             f'低优先级:{queue_info["low"]["length"]}, '
-            f'定时任务:{queue_info["total_scheduled"]}')
+            f'定时任务:{total_scheduled}')
+
+        # 核心改进：检查调度任务丢失情况
+        active_subscription_count = Subscription.query.filter_by(is_active=True).join(User).filter_by(is_active=True).count()
+
+        # 如果有活跃订阅但无调度任务，则触发恢复
+        if active_subscription_count > 0 and total_scheduled == 0:
+            log_activity('WARNING', 'rq_monitor',
+                f'检测到调度任务丢失: {active_subscription_count}个活跃订阅但无调度任务，开始自动恢复')
+            print(f"[RQ监控] 警告: 检测到{active_subscription_count}个活跃订阅但无调度任务，触发自动恢复")
+
+            # 清理标记文件并触发批量调度
+            rq_schedule_flag_file = '/app/data/rq_schedule_init_done'
+            if os.path.exists(rq_schedule_flag_file):
+                os.remove(rq_schedule_flag_file)
+                print(f"[RQ监控] 已清理过期的调度标记文件")
+
+            # 触发批量调度任务
+            from tasks import batch_schedule_all_subscriptions
+            from rq_config import enqueue_job
+            job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
+
+            log_activity('INFO', 'rq_monitor', f'自动恢复批量调度任务已排队: {job.id}')
+            print(f"[RQ监控] 自动恢复批量调度任务已排队: {job.id}")
+
+            # 创建新的标记文件
+            with open(rq_schedule_flag_file, 'w') as f:
+                f.write(f"{os.getpid()}|{int(time.time())}")
 
         # 检查失败任务数量
         failed_jobs = get_failed_jobs()
@@ -2221,6 +2249,8 @@ def monitor_rq_scheduler():
     except Exception as e:
         log_activity('ERROR', 'rq_monitor', f'RQ监控异常: {e}')
         print(f"[RQ监控] 异常: {e}")
+        import traceback
+        traceback.print_exc()
 
 def fallback_to_apscheduler():
     """降级到原APScheduler调度"""
@@ -5544,19 +5574,37 @@ def initialize_scheduler_safely():
                         print("[RQ] 数据库不存在，跳过批量调度")
                         return
 
-                # 检查RQ调度标记文件的有效性
+                # 检查RQ模式是否启用
+                rq_mode = os.environ.get('RQ_MODE', 'enabled')
+                if rq_mode != 'enabled':
+                    print("[RQ] RQ模式未启用，跳过批量调度")
+                    return
+
+                # 改进的调度有效性检查：同时验证标记文件和Redis中的实际任务数量
                 rq_schedule_valid = False
                 if os.path.exists(rq_schedule_flag_file):
                     try:
-                        # 检查标记文件的修改时间,如果超过10分钟则认为失效
+                        # 检查标记文件的修改时间,如果超过5分钟则认为失效
                         file_mtime = os.path.getmtime(rq_schedule_flag_file)
-                        if time.time() - file_mtime < 600:  # 10分钟内有效
-                            rq_schedule_valid = True
+                        if time.time() - file_mtime < 300:  # 5分钟内有效
+                            # 进一步验证Redis中是否真的有调度任务
+                            from rq_config import get_queue_info
+                            queue_info = get_queue_info()
+                            total_scheduled = queue_info.get('total_scheduled', 0)
+
+                            if total_scheduled > 0:
+                                rq_schedule_valid = True
+                                print(f"[RQ] 已有 {total_scheduled} 个调度任务在队列中，跳过批量调度")
+                            else:
+                                print("[RQ] 标记文件存在但Redis无调度任务，将重新调度")
+                                os.remove(rq_schedule_flag_file)
                         else:
                             print("[RQ] 调度标记文件已过期，将触发重新调度")
                             os.remove(rq_schedule_flag_file)
-                    except:
-                        pass
+                    except Exception as check_error:
+                        print(f"[RQ] 调度有效性检查失败: {check_error}，将重新调度")
+                        if os.path.exists(rq_schedule_flag_file):
+                            os.remove(rq_schedule_flag_file)
 
                 # 检查是否已经调度过
                 if not rq_schedule_valid:
@@ -5568,7 +5616,7 @@ def initialize_scheduler_safely():
                         print("[RQ] 没有活跃订阅，跳过批量调度")
                         # 创建标记文件以避免重复检查
                         with open(rq_schedule_flag_file, 'w') as f:
-                            f.write(str(os.getpid()))
+                            f.write(f"{os.getpid()}|{int(time.time())}")
                         return
 
                     from rq_config import enqueue_job
@@ -5576,11 +5624,13 @@ def initialize_scheduler_safely():
                     job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
                     print(f"[RQ] 批量调度任务已排队: {job.id}")
                     print(f"[RQ] 将调度 {subscription_count} 个活跃订阅到队列")
-                    # 创建标记文件
+                    # 创建标记文件，包含时间戳
                     with open(rq_schedule_flag_file, 'w') as f:
-                        f.write(str(os.getpid()))
+                        f.write(f"{os.getpid()}|{int(time.time())}")
             except Exception as e:
                 print(f"[RQ] 批量调度订阅失败: {e}")
+                import traceback
+                traceback.print_exc()
             return
 
         if os.path.exists(init_flag_file):
@@ -5619,29 +5669,54 @@ def initialize_scheduler_safely():
                 rq_mode = os.environ.get('RQ_MODE', 'enabled')
                 if rq_mode == 'enabled':
                     print("[RQ] 开始批量调度已有订阅...")
-                    from rq_config import redis_conn, enqueue_job
+                    from rq_config import redis_conn, enqueue_job, get_queue_info
                     from tasks import batch_schedule_all_subscriptions
 
                     # 测试Redis连接
                     redis_conn.ping()
 
-                    # 检查是否有订阅需要调度
-                    subscription_count = Subscription.query.filter_by(is_active=True).count()
-                    if subscription_count == 0:
-                        print("[RQ] 没有活跃订阅，跳过批量调度")
-                        # 创建标记文件以避免重复检查
+                    # 改进的调度有效性检查：验证Redis中的实际任务数量
+                    rq_schedule_valid = False
+                    if os.path.exists(rq_schedule_flag_file):
+                        try:
+                            file_mtime = os.path.getmtime(rq_schedule_flag_file)
+                            if time.time() - file_mtime < 300:  # 5分钟内有效
+                                # 验证Redis中是否真的有调度任务
+                                queue_info = get_queue_info()
+                                total_scheduled = queue_info.get('total_scheduled', 0)
+
+                                if total_scheduled > 0:
+                                    rq_schedule_valid = True
+                                    print(f"[RQ] 已有 {total_scheduled} 个调度任务在队列中，跳过批量调度")
+                                else:
+                                    print("[RQ] 标记文件存在但Redis无调度任务，将重新调度")
+                                    os.remove(rq_schedule_flag_file)
+                            else:
+                                print("[RQ] 调度标记文件已过期，将触发重新调度")
+                                os.remove(rq_schedule_flag_file)
+                        except Exception as check_error:
+                            print(f"[RQ] 调度有效性检查失败: {check_error}，将重新调度")
+                            if os.path.exists(rq_schedule_flag_file):
+                                os.remove(rq_schedule_flag_file)
+
+                    if not rq_schedule_valid:
+                        # 检查是否有订阅需要调度
+                        subscription_count = Subscription.query.filter_by(is_active=True).count()
+                        if subscription_count == 0:
+                            print("[RQ] 没有活跃订阅，跳过批量调度")
+                            # 创建标记文件以避免重复检查
+                            with open(rq_schedule_flag_file, 'w') as f:
+                                f.write(f"{os.getpid()}|{int(time.time())}")
+                            return
+
+                        # 提交批量调度任务（高优先级）
+                        job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
+                        print(f"[RQ] 批量调度任务已排队: {job.id}")
+                        print(f"[RQ] 将调度 {subscription_count} 个活跃订阅到队列")
+
+                        # 创建RQ调度标记，包含时间戳
                         with open(rq_schedule_flag_file, 'w') as f:
-                            f.write(str(os.getpid()))
-                        return
-
-                    # 提交批量调度任务（高优先级）
-                    job = enqueue_job(batch_schedule_all_subscriptions, priority='high')
-                    print(f"[RQ] 批量调度任务已排队: {job.id}")
-                    print(f"[RQ] 将调度 {subscription_count} 个活跃订阅到队列")
-
-                    # 创建RQ调度标记
-                    with open(rq_schedule_flag_file, 'w') as f:
-                        f.write(str(os.getpid()))
+                            f.write(f"{os.getpid()}|{int(time.time())}")
                 else:
                     print("[调度器] APScheduler降级模式，不需要批量调度")
             except Exception as e:

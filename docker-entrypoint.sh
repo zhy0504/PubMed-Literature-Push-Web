@@ -110,18 +110,11 @@ if [ "$RQ_MODE" = "enabled" ]; then
     log_info "Worker名称: ${RQ_WORKER_NAME:-default-worker}"
     log_info "监听队列: ${RQ_QUEUES:-high,default,low}"
 
-    # 清理过期的调度标记(容器重启后强制重新调度)
+    # 容器启动时总是清理调度标记(确保重启后自动恢复订阅)
     RQ_SCHEDULE_FLAG="/app/data/rq_schedule_init_done"
     if [ -f "$RQ_SCHEDULE_FLAG" ]; then
-        FILE_MTIME=$(stat -c %Y "$RQ_SCHEDULE_FLAG" 2>/dev/null || echo 0)
-        CURRENT_TIME=$(date +%s)
-        AGE=$((CURRENT_TIME - FILE_MTIME))
-
-        # 超过5分钟认为是容器重启
-        if [ $AGE -gt 300 ]; then
-            log_info "清理过期的调度标记(${AGE}秒前创建)"
-            rm -f "$RQ_SCHEDULE_FLAG"
-        fi
+        log_info "容器重启检测到，清理调度标记以触发任务恢复"
+        rm -f "$RQ_SCHEDULE_FLAG"
     fi
 
     # 仅主应用容器清理环境变量同步标记

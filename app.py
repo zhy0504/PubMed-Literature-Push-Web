@@ -630,7 +630,25 @@ log_file = os.environ.get('LOG_FILE', '/app/logs/app.log')
 
 # 设置日志级别
 log_level = getattr(logging, log_level_name, logging.INFO)
+
+# 移除Flask默认的处理器（它们可能有不同的日志级别）
+if app.logger.hasHandlers():
+    app.logger.handlers.clear()
+
+# 设置app.logger的日志级别
 app.logger.setLevel(log_level)
+
+# 同时设置根日志记录器的级别（确保所有处理器都生效）
+logging.getLogger().setLevel(log_level)
+
+# 配置控制台处理器（确保DEBUG日志也输出到控制台）
+console_handler = logging.StreamHandler()
+console_handler.setLevel(log_level)
+console_formatter = logging.Formatter(
+    '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+)
+console_handler.setFormatter(console_formatter)
+app.logger.addHandler(console_handler)
 
 # 配置日志文件处理器
 if log_file:
@@ -639,7 +657,7 @@ if log_file:
         log_dir = os.path.dirname(log_file)
         if log_dir and not os.path.exists(log_dir):
             os.makedirs(log_dir, exist_ok=True)
-        
+
         # 创建文件处理器（10MB 轮转，保留 5 个备份）
         file_handler = RotatingFileHandler(
             log_file,
@@ -648,16 +666,22 @@ if log_file:
             encoding='utf-8'
         )
         file_handler.setLevel(log_level)
-        
+
         # 设置日志格式
         formatter = logging.Formatter(
             '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
         )
         file_handler.setFormatter(formatter)
-        
+
         # 添加到 app.logger
         app.logger.addHandler(file_handler)
         app.logger.info(f"应用启动，日志级别: {log_level_name}, 日志文件: {log_file}")
+
+        # 输出调试信息验证配置
+        if log_level == logging.DEBUG:
+            app.logger.debug("DEBUG日志级别已启用 - 这是一条测试DEBUG消息")
+            app.logger.debug(f"日志处理器数量: {len(app.logger.handlers)}")
+            app.logger.debug(f"根日志记录器级别: {logging.getLogger().level}")
     except PermissionError:
         # 如果无法写入日志文件，只使用控制台输出
         print(f"[警告] 无权限写入日志文件: {log_file}，仅使用控制台输出")

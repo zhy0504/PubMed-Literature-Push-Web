@@ -12330,10 +12330,10 @@ def admin_mail_add():
                                     <div class="form-text">通常为465(SSL)或587(TLS)，推荐465</div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">邮箱地址 *</label>
-                                    <input type="email" class="form-control" name="username" required 
-                                           placeholder="your-email@qq.com">
-                                    <div class="form-text">用于发送邮件的邮箱地址</div>
+                                    <label class="form-label">邮箱地址/用户名 *</label>
+                                    <input type="text" class="form-control" name="username" required
+                                           placeholder="your-email@qq.com 或 username">
+                                    <div class="form-text">用于发送邮件的邮箱地址或SMTP用户名</div>
                                 </div>
                             </div>
                             <div class="col-md-6">
@@ -12486,8 +12486,9 @@ def admin_mail_edit(config_id):
                                     <input type="number" class="form-control" name="smtp_port" value="{{ config.smtp_port }}" required>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">邮箱地址 *</label>
-                                    <input type="email" class="form-control" name="username" value="{{ config.username }}" required>
+                                    <label class="form-label">邮箱地址/用户名 *</label>
+                                    <input type="text" class="form-control" name="username" value="{{ config.username }}" required>
+                                    <div class="form-text">用于发送邮件的邮箱地址或SMTP用户名</div>
                                 </div>
                             </div>
                             <div class="col-md-6">

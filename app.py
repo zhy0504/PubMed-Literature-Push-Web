@@ -9239,6 +9239,7 @@ def admin_subscriptions():
     <head>
         <title>订阅管理 - PubMed Literature Push</title>
         <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/css/bootstrap.min.css" rel="stylesheet">
+        <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" rel="stylesheet">
     </head>
     <body>
         <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
@@ -9253,9 +9254,9 @@ def admin_subscriptions():
         </nav>
 
         <div class="container mt-4">
-            <h2>订阅管理</h2>
+            <h2><i class="fas fa-rss"></i> 订阅管理</h2>
             <p class="text-muted">管理系统中的所有文献订阅</p>
-            
+
             <!-- 管理员消息显示 -->
             {% with messages = get_flashed_messages(category_filter=['admin']) %}
                 {% if messages %}
@@ -9267,19 +9268,19 @@ def admin_subscriptions():
                     {% endfor %}
                 {% endif %}
             {% endwith %}
-            
+
             <div class="card">
                 <div class="card-body">
                     {% if subscriptions %}
                     <div class="table-responsive">
-                        <table class="table">
+                        <table class="table table-hover">
                             <thead>
                                 <tr>
                                     <th>ID</th>
                                     <th>关键词</th>
                                     <th>用户邮箱</th>
                                     <th>创建时间</th>
-                                    <th>操作</th>
+                                    <th style="width: 200px;">操作</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -9292,7 +9293,16 @@ def admin_subscriptions():
                                     <td>{{ sub.user.email if sub.user else '未知用户' }}</td>
                                     <td>{{ sub.created_at.strftime('%Y-%m-%d %H:%M') if sub.created_at else '未知' }}</td>
                                     <td>
-                                        <button class="btn btn-sm btn-danger" onclick="if(confirm('确定删除此订阅吗？')) location.href='/admin/subscriptions/{{ sub.id }}/delete'">删除</button>
+                                        <a href="/admin/subscriptions/{{ sub.id }}/copy"
+                                           class="btn btn-sm btn-success"
+                                           title="追加给其他用户">
+                                            <i class="fas fa-copy"></i> 追加
+                                        </a>
+                                        <button class="btn btn-sm btn-danger"
+                                                onclick="if(confirm('确定删除此订阅吗？')) location.href='/admin/subscriptions/{{ sub.id }}/delete'"
+                                                title="删除订阅">
+                                            <i class="fas fa-trash"></i> 删除
+                                        </button>
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -9308,11 +9318,14 @@ def admin_subscriptions():
                     {% endif %}
                 </div>
             </div>
-            
+
             <div class="mt-3">
-                <a href="/admin" class="btn btn-secondary">返回仪表板</a>
+                <a href="/admin" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left"></i> 返回仪表板
+                </a>
             </div>
         </div>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/js/bootstrap.bundle.min.js"></script>
     </body>
     </html>
     """
@@ -9345,6 +9358,270 @@ def admin_delete_subscription(sub_id):
         db.session.rollback()
         flash(f'删除失败: {str(e)}', 'admin')
     return redirect(url_for('admin_subscriptions'))
+
+@app.route('/admin/subscriptions/<int:sub_id>/copy', methods=['GET', 'POST'])
+@admin_required
+def admin_copy_subscription(sub_id):
+    """管理员追加订阅给其他用户"""
+    if request.method == 'GET':
+        # 获取原始订阅信息
+        original_sub = Subscription.query.get_or_404(sub_id)
+
+        # 获取所有用户（排除原订阅用户）
+        all_users = User.query.filter(User.id != original_sub.user_id).order_by(User.email).all()
+
+        template = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>追加订阅给其他用户 - PubMed Literature Push</title>
+            <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/css/bootstrap.min.css" rel="stylesheet">
+            <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" rel="stylesheet">
+            <style>
+                .user-checkbox {
+                    padding: 10px;
+                    margin: 5px 0;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 5px;
+                    transition: background-color 0.2s;
+                }
+                .user-checkbox:hover {
+                    background-color: #f8f9fa;
+                }
+                .user-checkbox input[type="checkbox"] {
+                    margin-right: 10px;
+                }
+                .subscription-detail {
+                    background-color: #f8f9fa;
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin-bottom: 20px;
+                }
+                .search-box {
+                    margin-bottom: 15px;
+                }
+            </style>
+        </head>
+        <body>
+            <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+                <div class="container">
+                    <a class="navbar-brand" href="/">PubMed Literature Push</a>
+                    <div class="navbar-nav ms-auto">
+                        <a class="nav-link" href="/">首页</a>
+                        <a class="nav-link" href="/admin">管理员</a>
+                        <a class="nav-link" href="/logout">退出</a>
+                    </div>
+                </div>
+            </nav>
+
+            <div class="container mt-4">
+                <h2><i class="fas fa-copy"></i> 追加订阅给其他用户</h2>
+                <p class="text-muted">将订阅复制给其他用户，他们将获得相同的订阅配置</p>
+
+                <!-- 订阅详情 -->
+                <div class="subscription-detail">
+                    <h5><i class="fas fa-info-circle"></i> 订阅详情</h5>
+                    <p><strong>订阅ID:</strong> {{ sub.id }}</p>
+                    <p><strong>关键词:</strong> <span class="badge bg-primary">{{ sub.keywords }}</span></p>
+                    <p><strong>当前用户:</strong> {{ sub.user.email }}</p>
+                    <p><strong>创建时间:</strong> {{ sub.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    <p><strong>推送频率:</strong>
+                        {% if sub.push_frequency == 'daily' %}每日
+                        {% elif sub.push_frequency == 'weekly' %}每周
+                        {% elif sub.push_frequency == 'monthly' %}每月
+                        {% else %}{{ sub.push_frequency }}{% endif %}
+                    </p>
+                </div>
+
+                <!-- 用户选择表单 -->
+                <form method="POST" id="copyForm">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5><i class="fas fa-users"></i> 选择目标用户</h5>
+                        </div>
+                        <div class="card-body">
+                            <!-- 搜索框 -->
+                            <div class="search-box">
+                                <input type="text" id="userSearch" class="form-control" placeholder="搜索用户邮箱...">
+                            </div>
+
+                            <!-- 全选 -->
+                            <div class="mb-3">
+                                <label class="user-checkbox">
+                                    <input type="checkbox" id="selectAll">
+                                    <strong>全选/取消全选</strong>
+                                </label>
+                            </div>
+
+                            <!-- 用户列表 -->
+                            <div id="userList">
+                                {% if users %}
+                                    {% for user in users %}
+                                    <label class="user-checkbox user-item" data-email="{{ user.email }}">
+                                        <input type="checkbox" name="user_ids" value="{{ user.id }}">
+                                        {{ user.email }}
+                                        <span class="text-muted">(ID: {{ user.id }})</span>
+                                    </label>
+                                    {% endfor %}
+                                {% else %}
+                                    <p class="text-muted text-center">没有其他用户可以选择</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-3">
+                        <button type="submit" class="btn btn-primary" id="submitBtn">
+                            <i class="fas fa-copy"></i> 追加订阅
+                        </button>
+                        <a href="/admin/subscriptions" class="btn btn-secondary">取消</a>
+                    </div>
+                </form>
+            </div>
+
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/js/bootstrap.bundle.min.js"></script>
+            <script>
+                // 搜索功能
+                document.getElementById('userSearch').addEventListener('input', function() {
+                    const searchText = this.value.toLowerCase();
+                    const userItems = document.querySelectorAll('.user-item');
+
+                    userItems.forEach(item => {
+                        const email = item.getAttribute('data-email').toLowerCase();
+                        if (email.includes(searchText)) {
+                            item.style.display = '';
+                        } else {
+                            item.style.display = 'none';
+                        }
+                    });
+                });
+
+                // 全选功能
+                document.getElementById('selectAll').addEventListener('change', function() {
+                    const checkboxes = document.querySelectorAll('.user-item input[type="checkbox"]');
+                    const visibleCheckboxes = Array.from(checkboxes).filter(cb =>
+                        cb.closest('.user-item').style.display !== 'none'
+                    );
+
+                    visibleCheckboxes.forEach(cb => {
+                        cb.checked = this.checked;
+                    });
+                });
+
+                // 表单提交验证
+                document.getElementById('copyForm').addEventListener('submit', function(e) {
+                    const checkedBoxes = document.querySelectorAll('.user-item input[type="checkbox"]:checked');
+                    if (checkedBoxes.length === 0) {
+                        e.preventDefault();
+                        alert('请至少选择一个用户');
+                        return false;
+                    }
+
+                    const submitBtn = document.getElementById('submitBtn');
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 处理中...';
+                });
+            </script>
+        </body>
+        </html>
+        """
+        return render_template_string(template, sub=original_sub, users=all_users)
+
+    elif request.method == 'POST':
+        # 处理追加订阅
+        try:
+            user_ids = request.form.getlist('user_ids')
+            if not user_ids:
+                flash('请至少选择一个用户', 'admin')
+                return redirect(url_for('admin_copy_subscription', sub_id=sub_id))
+
+            # 获取原始订阅
+            original_sub = Subscription.query.get_or_404(sub_id)
+
+            success_count = 0
+            skip_count = 0
+            error_users = []
+
+            for user_id in user_ids:
+                try:
+                    user_id = int(user_id)
+                    user = User.query.get(user_id)
+                    if not user:
+                        continue
+
+                    # 检查用户是否已有相同关键词的订阅
+                    existing = Subscription.query.filter_by(
+                        user_id=user_id,
+                        keywords=original_sub.keywords
+                    ).first()
+
+                    if existing:
+                        skip_count += 1
+                        continue
+
+                    # 创建新订阅（复制所有配置）
+                    new_sub = Subscription(
+                        user_id=user_id,
+                        keywords=original_sub.keywords,
+                        is_active=original_sub.is_active,
+                        max_results=original_sub.max_results,
+                        days_back=original_sub.days_back,
+                        exclude_no_issn=original_sub.exclude_no_issn,
+                        jcr_quartiles=original_sub.jcr_quartiles,
+                        min_impact_factor=original_sub.min_impact_factor,
+                        cas_categories=original_sub.cas_categories,
+                        cas_top_only=original_sub.cas_top_only,
+                        filter_config=original_sub.filter_config,
+                        use_advanced_filter=original_sub.use_advanced_filter,
+                        push_frequency=original_sub.push_frequency,
+                        push_time=original_sub.push_time,
+                        push_day=original_sub.push_day,
+                        push_month_day=original_sub.push_month_day
+                    )
+                    db.session.add(new_sub)
+                    db.session.flush()
+
+                    # 为新订阅创建RQ调度任务
+                    try:
+                        from rq_config import schedule_subscription_task
+                        schedule_subscription_task(new_sub)
+                        app.logger.info(f"[管理员] 为用户 {user.email} 创建订阅调度任务: {new_sub.id}")
+                    except Exception as e:
+                        app.logger.warning(f"[管理员] 创建调度任务失败: {e}")
+
+                    success_count += 1
+
+                except Exception as e:
+                    error_users.append(f"用户ID {user_id}: {str(e)}")
+                    continue
+
+            db.session.commit()
+
+            # 记录日志
+            log_activity(
+                'INFO', 'admin',
+                f'管理员 {current_user.email} 追加订阅 {sub_id} 给 {success_count} 个用户',
+                current_user.id, request.remote_addr
+            )
+
+            # 显示结果
+            if success_count > 0:
+                flash(f'成功追加订阅给 {success_count} 个用户', 'admin')
+            if skip_count > 0:
+                flash(f'{skip_count} 个用户已有相同订阅，已跳过', 'admin')
+            if error_users:
+                flash(f'部分用户追加失败: {"; ".join(error_users[:3])}', 'admin')
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f'追加失败: {str(e)}', 'admin')
+            log_activity(
+                'ERROR', 'admin',
+                f'管理员 {current_user.email} 追加订阅 {sub_id} 失败: {str(e)}',
+                current_user.id, request.remote_addr
+            )
+
+        return redirect(url_for('admin_subscriptions'))
 
 @app.route('/profile')
 @login_required

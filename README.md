@@ -561,7 +561,29 @@ python app.py
 
 ### 使用 Docker Compose 部署（推荐）
 
-项目提供生产级 Docker Compose 配置，包含 Redis、RQ Worker、RQ Dashboard 等完整服务。
+项目提供两种生产级 Docker Compose 配置：
+
+| 配置文件 | 适用场景 | 安全级别 | 说明 |
+|---------|---------|---------|------|
+| **docker-compose.prod.yml** | 标准部署 | 中等 | 所有端口对外开放，适合测试环境 |
+| **docker-compose.prod.internal.yml** | 内网隔离部署 | 高 | 仅Nginx对外，其他服务完全隔离 |
+
+#### 配置选择指南
+
+**标准部署** - 适合以下场景：
+- 开发测试环境
+- 内网环境部署
+- 需要直接访问各服务端口
+
+**内网隔离部署（推荐）** - 适合以下场景：
+- ✅ 生产环境部署
+- ✅ 公网暴露服务
+- ✅ 高安全要求场景
+- ✅ 符合等保合规要求
+
+---
+
+### 方式一：标准部署（所有端口可访问）
 
 #### 1. 准备环境文件
 
@@ -628,12 +650,200 @@ docker stats
 docker system prune -a
 ```
 
+---
+
+### 方式二：内网隔离部署（推荐生产环境）
+
+此配置实现完整的网络隔离，仅通过 Nginx 反向代理对外提供服务。
+
+#### 安全特性
+
+- ✅ **完全网络隔离**：Redis、Worker、RQ Dashboard 完全隔离在内部网络
+- ✅ **最小暴露原则**：仅 Nginx 80/443 端口对外
+- ✅ **本地管理访问**：应用和监控面板仅绑定 127.0.0.1
+- ✅ **双层网络架构**：内部网络（internal）+ 外部网络（external）
+
+#### 网络架构
+
+```
+公网流量
+   ↓
+Nginx (80/443) ← 唯一对外入口
+   ↓
+[外部网络: pubmed-external]
+   ↓
+App (127.0.0.1:5005) ← 仅本地+容器访问
+   ↓
+[内部网络: pubmed-internal, internal=true]
+   ↓
+Redis + Worker-1 + Worker-2 + RQ Dashboard ← 完全隔离
+```
+
+#### 1. 准备配置文件
+
+创建 `.env` 文件（同标准部署）：
+
+```bash
+TZ=Asia/Shanghai
+LOG_LEVEL=INFO
+RQ_DASHBOARD_USER=admin
+RQ_DASHBOARD_PASS=your_secure_password
+```
+
+#### 2. 配置 Nginx（如需自定义）
+
+编辑 [nginx/conf.d/pubmed.conf](nginx/conf.d/pubmed.conf)：
+
+```nginx
+# 修改域名
+server_name your-domain.com;
+
+# 启用 HTTPS（需要SSL证书）
+# 取消注释 HTTPS server 块配置
+```
+
+#### 3. 启动服务
+
+```bash
+# 使用预构建镜像
+docker-compose -f docker-compose.prod.internal.yml up -d
+
+# 或本地构建
+docker build -t ghcr.io/zhy0504/pubmed-literature-push-web:latest .
+docker-compose -f docker-compose.prod.internal.yml up -d
+```
+
+#### 4. 验证隔离配置
+
+```bash
+# 1. 验证服务启动
+docker-compose -f docker-compose.prod.internal.yml ps
+
+# 2. 验证网络隔离（应无法从宿主机访问）
+curl http://localhost:6379  # 应失败 - Redis已隔离
+curl http://localhost:5005  # 应失败 - App仅127.0.0.1
+
+# 3. 验证Nginx正常工作
+curl http://localhost  # 应成功 - Nginx对外服务
+
+# 4. 本地管理访问（需在宿主机上）
+curl http://127.0.0.1:5005/health  # 应成功
+curl http://127.0.0.1:9181  # RQ Dashboard
+```
+
+#### 5. 访问服务
+
+| 服务 | 访问方式 | 访问地址 |
+|------|---------|---------|
+| **用户访问** | 公网/内网 | http://your-server-ip 或 https://your-domain.com |
+| **管理后台** | 公网/内网 | http://your-server-ip/admin |
+| **应用直连** | 仅宿主机本地 | http://127.0.0.1:5005 |
+| **RQ Dashboard** | 仅宿主机本地 | http://127.0.0.1:9181 |
+
+#### 6. SSL/HTTPS 配置（生产必备）
+
+**获取免费 SSL 证书（Let's Encrypt）**
+
+```bash
+# 安装 certbot
+sudo apt-get update
+sudo apt-get install certbot
+
+# 生成证书（需要停止 Nginx）
+docker-compose -f docker-compose.prod.internal.yml stop nginx
+sudo certbot certonly --standalone -d your-domain.com
+
+# 证书将保存在 /etc/letsencrypt/live/your-domain.com/
+# 创建软链接到项目目录
+mkdir -p nginx/ssl
+sudo ln -s /etc/letsencrypt/live/your-domain.com/fullchain.pem nginx/ssl/
+sudo ln -s /etc/letsencrypt/live/your-domain.com/privkey.pem nginx/ssl/
+```
+
+**启用 HTTPS 配置**
+
+编辑 `nginx/conf.d/pubmed.conf`，取消注释 HTTPS server 块，然后重启：
+
+```bash
+docker-compose -f docker-compose.prod.internal.yml restart nginx
+```
+
+#### 7. 防火墙配置（可选增强）
+
+```bash
+# Ubuntu/Debian - 使用 ufw
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp    # SSH
+sudo ufw allow 80/tcp    # HTTP
+sudo ufw allow 443/tcp   # HTTPS
+sudo ufw enable
+
+# CentOS/RHEL - 使用 firewalld
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --permanent --add-service=ssh
+sudo firewall-cmd --reload
+```
+
+#### 8. 常用管理命令
+
+```bash
+# 查看服务状态
+docker-compose -f docker-compose.prod.internal.yml ps
+
+# 查看日志
+docker-compose -f docker-compose.prod.internal.yml logs -f nginx
+docker-compose -f docker-compose.prod.internal.yml logs -f app
+
+# 重启服务
+docker-compose -f docker-compose.prod.internal.yml restart
+
+# 停止服务
+docker-compose -f docker-compose.prod.internal.yml down
+
+# 更新镜像
+docker-compose -f docker-compose.prod.internal.yml pull
+docker-compose -f docker-compose.prod.internal.yml up -d
+```
+
+#### 9. 监控和维护
+
+**查看 RQ 任务队列**（仅宿主机本地）
+```bash
+# 通过浏览器访问（需在服务器上配置SSH隧道）
+ssh -L 9181:127.0.0.1:9181 user@your-server-ip
+
+# 然后在本地浏览器访问
+# http://localhost:9181
+```
+
+**查看应用健康状态**（仅宿主机本地）
+```bash
+curl http://127.0.0.1:5005/health
+```
+
+---
+
 ### 生产环境配置建议
 
-- 使用 Nginx 作为反向代理
-- 配置 HTTPS 证书
-- 启用日志轮转
-- 定期备份数据库和配置文件
+**安全加固**
+- ✅ 使用内网隔离部署模式（docker-compose.prod.internal.yml）
+- ✅ 配置 HTTPS 证书（Let's Encrypt 免费证书）
+- ✅ 启用防火墙仅开放必要端口
+- ✅ 定期更新 Docker 镜像和系统补丁
+- ✅ 修改默认管理员密码
+
+**运维管理**
+- 启用日志轮转（已在 docker-compose 中配置）
+- 定期备份数据库（`data/pubmed_app.db`）和配置文件
+- 监控 Redis 内存使用，调整 `maxmemory` 参数
+- 根据负载调整 Worker 数量
+
+**性能优化**
+- 使用 CDN 加速静态资源
+- 配置 Nginx 缓存策略
+- 根据实际负载调整资源限制
 
 ---
 

@@ -1,0 +1,261 @@
+# 生产环境Docker Compose配置 - 内网隔离版
+# 特性: 多Worker、健康检查、资源限制、日志管理、内部网络隔离
+# 安全: 所有服务仅在内部网络通信，仅Nginx对外暴露
+
+services:
+  # ==================== Redis服务（内网隔离） ====================
+  redis:
+    image: redis:7-alpine
+    container_name: pubmed-redis-prod
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    volumes:
+      - redis-data:/data
+      - ./logs/redis:/var/log/redis:rw
+    # 不暴露端口到宿主机，仅容器间通信
+    expose:
+      - "6379"
+    restart: unless-stopped
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - pubmed-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ==================== 主应用服务（仅本地访问） ====================
+  app:
+    image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
+    container_name: pubmed-app-prod
+    # 仅绑定到本地回环地址
+    ports:
+      - "127.0.0.1:5005:5005"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:////app/data/pubmed_app.db
+      - REDIS_URL=redis://redis:6379/0
+      - TZ=${TZ:-Asia/Shanghai}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/app.log
+      - FLASK_ENV=production
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5005/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - pubmed-internal
+      - pubmed-external  # 允许Nginx访问
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ==================== RQ Worker 1（完全内网） ====================
+  worker-1:
+    image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
+    container_name: pubmed-rq-worker-1
+    command: python /app/rq_worker.py
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:////app/data/pubmed_app.db
+      - REDIS_URL=redis://redis:6379/0
+      - RQ_WORKER_NAME=pubmed-worker-prod-1
+      - RQ_QUEUES=high,default,low
+      - TZ=${TZ:-Asia/Shanghai}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/rq_worker_1.log
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; redis.Redis.from_url('redis://redis:6379/0').ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - pubmed-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ==================== RQ Worker 2（完全内网） ====================
+  worker-2:
+    image: ghcr.io/zhy0504/pubmed-literature-push-web:latest
+    container_name: pubmed-rq-worker-2
+    command: python /app/rq_worker.py
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:////app/data/pubmed_app.db
+      - REDIS_URL=redis://redis:6379/0
+      - RQ_WORKER_NAME=pubmed-worker-prod-2
+      - RQ_QUEUES=high,default,low
+      - TZ=${TZ:-Asia/Shanghai}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/rq_worker_2.log
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; redis.Redis.from_url('redis://redis:6379/0').ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - pubmed-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ==================== RQ Dashboard（仅本地访问） ====================
+  rq-dashboard:
+    image: cjlapao/rq-dashboard:latest
+    container_name: pubmed-rq-dashboard-prod
+    # 仅绑定到本地回环地址
+    ports:
+      - "127.0.0.1:9181:9181"
+    environment:
+      - RQ_DASHBOARD_REDIS_URL=redis://redis:6379/0
+      - RQ_DASHBOARD_USERNAME=${RQ_DASHBOARD_USER:-admin}
+      - RQ_DASHBOARD_PASSWORD=${RQ_DASHBOARD_PASS:-admin123}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pubmed-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # ==================== Nginx反向代理（唯一对外入口） ====================
+  nginx:
+    image: nginx:alpine
+    container_name: pubmed-nginx-prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pubmed-external
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+# ==================== 命名卷 ====================
+volumes:
+  redis-data:
+    driver: local
+
+# ==================== 网络隔离 ====================
+networks:
+  # 内部网络：完全隔离，仅容器间通信
+  pubmed-internal:
+    driver: bridge
+    internal: true  # 关键：禁止外部访问
+
+  # 外部网络：仅Nginx和App使用
+  pubmed-external:
+    driver: bridge

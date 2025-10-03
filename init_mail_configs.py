@@ -31,6 +31,7 @@ class MailConfig(db.Model):
     smtp_port = db.Column(db.Integer, nullable=False, default=465)
     username = db.Column(db.String(100), nullable=False)
     password = db.Column(db.String(200), nullable=False)
+    from_email = db.Column(db.String(120), nullable=True)  # 发件人邮箱地址
     use_tls = db.Column(db.Boolean, default=True)
     is_active = db.Column(db.Boolean, default=True)
     daily_limit = db.Column(db.Integer, default=100)

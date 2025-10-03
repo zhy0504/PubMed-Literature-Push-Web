@@ -5,6 +5,7 @@
 1. 为 subscription 表添加 filter_config 和 use_advanced_filter 字段
 2. 更新 user 表的 allowed_frequencies 字段（从 'weekly' 更新为 'daily,weekly,monthly'）
 3. 添加邀请码功能表（invite_code 和 invite_code_usage）
+4. 为 mail_config 表添加 from_email 字段
 """
 
 import sqlite3
@@ -146,6 +147,20 @@ def migrate_database():
             """)
             print("  [OK] require_invite_code 设置添加成功")
 
+        # ==================== 迁移 4: 添加邮箱配置from_email字段 ====================
+        print("\n【迁移 4】检查 mail_config 表字段...")
+
+        cursor.execute("PRAGMA table_info(mail_config)")
+        mail_columns = [col[1] for col in cursor.fetchall()]
+
+        if 'from_email' not in mail_columns:
+            print("  添加 from_email 字段...")
+            cursor.execute("ALTER TABLE mail_config ADD COLUMN from_email VARCHAR(120)")
+            print("  [OK] from_email 字段已添加")
+            print("  说明: 现有配置的from_email为空,将自动使用username作为发件人地址")
+        else:
+            print("  [OK] from_email 字段已存在")
+
         # 提交所有更改
         conn.commit()
 
@@ -188,10 +203,17 @@ def migrate_database():
         if result:
             print(f"\n  邀请码注册设置: {result[0]} (关闭)")
 
+        # 验证邮箱配置字段
+        cursor.execute("PRAGMA table_info(mail_config)")
+        mail_columns = [col[1] for col in cursor.fetchall()]
+        print(f"\n  mail_config 表:")
+        print(f"    包含 from_email: {'from_email' in mail_columns}")
+
         print("\n[OK] 数据库迁移完成！")
         print("\n提示:")
         print("  - 可在管理后台'系统设置'中开启'需要邀请码注册'")
-        print("  - 在'邀请码管理'中生成邀请码")
+        print("  - 在'邮箱管理'中编辑配置,设置发件人邮箱地址")
+        print("  - 发件人地址留空时将自动使用SMTP用户名")
 
         conn.close()
 

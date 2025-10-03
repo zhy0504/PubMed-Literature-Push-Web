@@ -1027,8 +1027,9 @@ class MailConfig(db.Model):
     name = db.Column(db.String(100), nullable=False)  # 配置名称
     smtp_server = db.Column(db.String(100), nullable=False)
     smtp_port = db.Column(db.Integer, nullable=False, default=465)
-    username = db.Column(db.String(100), nullable=False)
+    username = db.Column(db.String(100), nullable=False)  # SMTP登录用户名
     password = db.Column(db.String(200), nullable=False)
+    from_email = db.Column(db.String(120), nullable=True)  # 发件人邮箱地址(可选,为空时使用username)
     use_tls = db.Column(db.Boolean, default=True)
     is_active = db.Column(db.Boolean, default=True)
     daily_limit = db.Column(db.Integer, default=100)  # 每日发送限制
@@ -1184,9 +1185,11 @@ class MailSender:
             mail = Mail(app)
             
             # 创建邮件消息
+            # 使用from_email字段(如果有),否则使用username
+            sender_email = config.from_email or config.username
             msg = Message(
                 subject=subject,
-                sender=('PubMed Literature Push', config.username),
+                sender=('PubMed Literature Push', sender_email),
                 recipients=[to_email]
             )
             msg.html = html_body
@@ -12251,6 +12254,7 @@ def admin_mail_add():
                 smtp_port=int(request.form.get('smtp_port', 465)),
                 username=request.form.get('username'),
                 password=request.form.get('password'),
+                from_email=request.form.get('from_email') or None,
                 use_tls=bool(request.form.get('use_tls')),
                 daily_limit=int(request.form.get('daily_limit', 100))
             )
@@ -12330,10 +12334,16 @@ def admin_mail_add():
                                     <div class="form-text">通常为465(SSL)或587(TLS)，推荐465</div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">邮箱地址/用户名 *</label>
+                                    <label class="form-label">SMTP用户名 *</label>
                                     <input type="text" class="form-control" name="username" required
-                                           placeholder="your-email@qq.com 或 username">
-                                    <div class="form-text">用于发送邮件的邮箱地址或SMTP用户名</div>
+                                           placeholder="ls5B8XBWIx 或 your-email@qq.com">
+                                    <div class="form-text">用于SMTP登录认证的用户名</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">发件人邮箱地址</label>
+                                    <input type="email" class="form-control" name="from_email"
+                                           placeholder="sender@example.com">
+                                    <div class="form-text">显示为发件人的邮箱地址(留空时使用SMTP用户名)</div>
                                 </div>
                             </div>
                             <div class="col-md-6">
@@ -12414,6 +12424,7 @@ def admin_mail_edit(config_id):
             config.username = request.form.get('username')
             if request.form.get('password'):  # 只有输入新密码时才更新
                 config.password = request.form.get('password')
+            config.from_email = request.form.get('from_email') or None
             config.use_tls = bool(request.form.get('use_tls'))
             config.daily_limit = int(request.form.get('daily_limit', 100))
             
@@ -12486,9 +12497,14 @@ def admin_mail_edit(config_id):
                                     <input type="number" class="form-control" name="smtp_port" value="{{ config.smtp_port }}" required>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">邮箱地址/用户名 *</label>
+                                    <label class="form-label">SMTP用户名 *</label>
                                     <input type="text" class="form-control" name="username" value="{{ config.username }}" required>
-                                    <div class="form-text">用于发送邮件的邮箱地址或SMTP用户名</div>
+                                    <div class="form-text">用于SMTP登录认证的用户名</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">发件人邮箱地址</label>
+                                    <input type="email" class="form-control" name="from_email" value="{{ config.from_email or '' }}">
+                                    <div class="form-text">显示为发件人的邮箱地址(留空时使用SMTP用户名)</div>
                                 </div>
                             </div>
                             <div class="col-md-6">
@@ -12637,10 +12653,12 @@ def admin_mail_test(config_id):
             app.config['MAIL_USE_SSL'] = False
         
         mail = Mail(app)
-        
+
+        # 使用from_email字段(如果有),否则使用username
+        sender_email = config.from_email or config.username
         msg = Message(
             subject=test_subject,
-            sender=config.username,
+            sender=sender_email,
             recipients=[current_user.email]  # 发送给当前管理员
         )
         msg.html = test_content

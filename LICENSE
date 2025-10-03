@@ -1,16 +1,63 @@
-MIT License
+DUAL LICENSE AGREEMENT
 
+PubMed Literature Push Web
 Copyright (c) 2025 zhy0504
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software is available under a dual licensing model:
+
+================================================================================
+1. PERSONAL USE LICENSE (Free)
+================================================================================
+
+Permission is hereby granted, free of charge, to any INDIVIDUAL (natural person)
+obtaining a copy of this software and associated documentation files (the
+"Software"), to use, copy, modify, and distribute the Software for PERSONAL,
+NON-COMMERCIAL purposes, subject to the following conditions:
+
+PERMITTED USES (Personal License):
+- Personal research and learning
+- Academic and educational purposes (individual students/researchers)
+- Personal projects without commercial intent
+- Open source contributions to this project
+
+RESTRICTIONS (Personal License):
+- ✗ Commercial use (generating revenue directly or indirectly)
+- ✗ Use within commercial organizations or enterprises
+- ✗ Provision as a paid service or SaaS platform
+- ✗ Integration into commercial products or services
+- ✗ Redistribution as part of commercial software
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
+
+================================================================================
+2. COMMERCIAL LICENSE (Requires Authorization)
+================================================================================
+
+COMMERCIAL USE includes but is not limited to:
+- Use by for-profit organizations, companies, or enterprises
+- Integration into products or services that generate revenue
+- Providing the Software as a paid service (SaaS)
+- Use in internal business operations or workflows
+- Distribution to paying customers or clients
+
+To obtain a COMMERCIAL LICENSE, you must contact the copyright holder for
+authorization and terms:
+
+Contact for Commercial Licensing:
+- GitHub Issues: https://github.com/zhy0504/PubMed-Literature-Push-Web/issues
+- Create an issue titled "[Commercial License Request]" with your use case
+
+Commercial licensing terms will be negotiated on a case-by-case basis and may
+include:
+- One-time license fees
+- Usage-based pricing
+- Custom support and maintenance agreements
+- Enterprise deployment assistance
+
+================================================================================
+GENERAL TERMS (Both Licenses)
+================================================================================
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -19,3 +66,58 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+COMPLIANCE WITH THIRD-PARTY TERMS:
+Users must comply with all applicable third-party terms and conditions,
+including but not limited to:
+- PubMed/NCBI Terms of Use (https://www.ncbi.nlm.nih.gov/home/about/policies/)
+- OpenAI API Terms of Service
+- SMTP provider terms (Gmail, QQ Mail, etc.)
+
+DISCLAIMER:
+This software is intended for research and educational purposes. Users are
+responsible for ensuring their use complies with all applicable laws,
+regulations, and third-party terms of service.
+
+================================================================================
+LICENSE DETERMINATION
+================================================================================
+
+IF YOU ARE UNSURE which license applies to your use case:
+
+PERSONAL LICENSE applies if:
+✓ You are an individual using this for personal projects
+✓ You are a student/researcher using this for academic work
+✓ Your use generates no revenue and is not for business purposes
+
+COMMERCIAL LICENSE required if:
+✓ You are using this within a company or organization
+✓ Your use generates any direct or indirect revenue
+✓ You are providing services to customers using this software
+✓ You are integrating this into a commercial product
+
+When in doubt, contact the copyright holder for clarification.
+
+================================================================================
+CONTRIBUTIONS
+================================================================================
+
+Contributors to this project agree that their contributions will be licensed
+under the same dual licensing model. Contributors retain copyright to their
+individual contributions while granting the project maintainers the right to
+include their work under both license options.
+
+================================================================================
+TERMINATION
+================================================================================
+
+Any violation of the license terms will result in automatic termination of
+your rights under this license. Commercial use without proper authorization
+is strictly prohibited and may result in legal action.
+
+================================================================================
+
+For questions about licensing, please contact:
+GitHub: https://github.com/zhy0504/PubMed-Literature-Push-Web
+
+Last Updated: 2025-01-01

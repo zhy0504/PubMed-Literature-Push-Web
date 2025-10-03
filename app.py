@@ -11647,10 +11647,10 @@ def admin_rq_clear_failed():
     """清空失败任务"""
     try:
         from rq_config import clear_failed_jobs
-        clear_failed_jobs()
+        cleared_count = clear_failed_jobs()
 
-        log_activity('INFO', 'admin', 'RQ失败任务已清空', current_user.id, request.remote_addr)
-        flash('RQ失败任务已清空', 'admin')
+        log_activity('INFO', 'admin', f'RQ失败任务已清空: {cleared_count}个', current_user.id, request.remote_addr)
+        flash(f'成功清空 {cleared_count} 个失败任务', 'success')
 
     except Exception as e:
         log_activity('ERROR', 'admin', f'清空RQ失败任务失败: {str(e)}', current_user.id, request.remote_addr)

@@ -195,10 +195,30 @@ def requeue_failed_job(job_id: str):
         return False
 
 def clear_failed_jobs():
-    """清空失败任务"""
-    for queue in [high_priority_queue, default_queue, low_priority_queue]:
-        registry = queue.failed_job_registry
-        registry.requeue(*registry.get_job_ids())
+    """清空失败任务（删除而不是重新排队）"""
+    cleared_count = 0
+    try:
+        for queue in [high_priority_queue, default_queue, low_priority_queue]:
+            registry = queue.failed_job_registry
+            job_ids = list(registry.get_job_ids())
+
+            for job_id in job_ids:
+                try:
+                    # 从失败注册表中移除
+                    registry.remove(job_id)
+                    # 删除任务数据
+                    from rq.job import Job
+                    job = Job.fetch(job_id, connection=redis_conn)
+                    job.delete()
+                    cleared_count += 1
+                except Exception as e:
+                    logging.warning(f"删除失败任务 {job_id} 时出错: {e}")
+
+        logging.info(f"已清空 {cleared_count} 个失败任务")
+        return cleared_count
+    except Exception as e:
+        logging.error(f"清空失败任务时发生异常: {e}")
+        return cleared_count
 
 class RQConfig:
     """RQ配置类"""

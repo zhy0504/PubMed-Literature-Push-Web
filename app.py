@@ -10595,7 +10595,29 @@ def admin_push():
                     </div>
                     
                     <hr class="my-4">
-                    
+
+                    <!-- RQ队列维护功能 -->
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-broom"></i> RQ队列清理</h6>
+                            <p class="text-muted">清理已删除订阅遗留的调度任务和失败任务</p>
+                            <form method="POST" action="/admin/rq/cleanup-orphaned" style="display: inline;">
+                                <button type="submit" class="btn btn-outline-primary"
+                                        onclick="return confirm('确定清理已删除订阅的遗留任务吗？\\n\\n这将扫描RQ队列并删除不再有效的订阅任务。')">
+                                    <i class="fas fa-broom"></i> 清理遗留任务
+                                </button>
+                            </form>
+                            <form method="POST" action="/admin/rq/clear-failed" style="display: inline;" class="ms-2">
+                                <button type="submit" class="btn btn-outline-warning">
+                                    <i class="fas fa-exclamation-triangle"></i> 清空失败任务
+                                </button>
+                            </form>
+                            <small class="text-muted d-block mt-2">遗留任务：清理已删除订阅的调度任务 | 失败任务：清空执行失败的任务记录</small>
+                        </div>
+                    </div>
+
+                    <hr class="my-4">
+
                     <!-- 测试和维护功能 -->
                     <div class="row">
                         <div class="col-md-4">
@@ -11612,14 +11634,59 @@ def admin_rq_clear_failed():
     try:
         from rq_config import clear_failed_jobs
         clear_failed_jobs()
-        
+
         log_activity('INFO', 'admin', 'RQ失败任务已清空', current_user.id, request.remote_addr)
         flash('RQ失败任务已清空', 'admin')
-        
+
     except Exception as e:
         log_activity('ERROR', 'admin', f'清空RQ失败任务失败: {str(e)}', current_user.id, request.remote_addr)
-        flash(f'清空RQ失败任务失败: {str(e)}', 'admin')
-    
+        flash(f'清空失败任务失败: {str(e)}', 'admin')
+
+    return redirect(url_for('admin_push'))
+
+@app.route('/admin/rq/cleanup-orphaned', methods=['POST'])
+@admin_required
+def admin_rq_cleanup_orphaned():
+    """清理已删除订阅的遗留任务"""
+    try:
+        from rq_config import redis_conn, high_priority_queue, default_queue, low_priority_queue
+        from rq.registry import ScheduledJobRegistry
+        from rq.job import Job
+
+        # 获取所有有效的订阅ID
+        valid_subscription_ids = set()
+        subscriptions = Subscription.query.all()
+        for sub in subscriptions:
+            valid_subscription_ids.add(sub.id)
+
+        removed_count = 0
+
+        # 扫描所有队列的scheduled任务
+        for queue in [high_priority_queue, default_queue, low_priority_queue]:
+            registry = ScheduledJobRegistry(queue=queue)
+            for job_id in list(registry.get_job_ids()):
+                # 解析任务ID中的订阅ID
+                if job_id.startswith('push_subscription_'):
+                    try:
+                        parts = job_id.split('_')
+                        if len(parts) >= 3:
+                            subscription_id = int(parts[2])
+                            # 如果订阅已删除，清理任务
+                            if subscription_id not in valid_subscription_ids:
+                                job = Job.fetch(job_id, connection=redis_conn)
+                                job.cancel()
+                                registry.remove(job_id)
+                                removed_count += 1
+                    except Exception as e:
+                        app.logger.warning(f"处理任务 {job_id} 失败: {e}")
+
+        log_activity('INFO', 'admin', f'已清理 {removed_count} 个遗留任务', current_user.id, request.remote_addr)
+        flash(f'成功清理 {removed_count} 个已删除订阅的遗留任务', 'success')
+
+    except Exception as e:
+        log_activity('ERROR', 'admin', f'清理遗留任务失败: {str(e)}', current_user.id, request.remote_addr)
+        flash(f'清理遗留任务失败: {str(e)}', 'admin')
+
     return redirect(url_for('admin_push'))
 
 @app.route('/admin/rq/status')

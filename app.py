@@ -2281,14 +2281,31 @@ def monitor_rq_scheduler():
             f'低优先级:{queue_info["low"]["length"]}, '
             f'定时任务:{total_scheduled}')
 
-        # 核心改进：检查调度任务丢失情况
+        # 核心改进：检查调度任务丢失或不一致情况
         active_subscription_count = Subscription.query.filter_by(is_active=True).join(User).filter_by(is_active=True).count()
 
-        # 如果有活跃订阅但无调度任务，则触发恢复
+        # 检测三种异常情况：
+        # 1. 有订阅但无调度任务（全部丢失）
+        # 2. 订阅数 > 调度任务数（部分新增订阅未调度）
+        # 3. 调度任务数 > 订阅数（有冗余任务，需要清理）
+        needs_recovery = False
+        recovery_reason = ""
+
         if active_subscription_count > 0 and total_scheduled == 0:
+            needs_recovery = True
+            recovery_reason = f"{active_subscription_count}个活跃订阅但无调度任务（全部丢失）"
+        elif active_subscription_count > total_scheduled:
+            needs_recovery = True
+            recovery_reason = f"订阅数({active_subscription_count}) > 调度任务数({total_scheduled})，有{active_subscription_count - total_scheduled}个订阅未调度"
+        elif total_scheduled > active_subscription_count and active_subscription_count > 0:
+            # 仅记录警告，暂不自动清理（避免误删除即将执行的任务）
             log_activity('WARNING', 'rq_monitor',
-                f'检测到调度任务丢失: {active_subscription_count}个活跃订阅但无调度任务，开始自动恢复')
-            print(f"[RQ监控] 警告: 检测到{active_subscription_count}个活跃订阅但无调度任务，触发自动恢复")
+                f'调度任务数({total_scheduled}) > 订阅数({active_subscription_count})，可能存在冗余任务')
+            print(f"[RQ监控] 警告: 调度任务数({total_scheduled}) > 订阅数({active_subscription_count})")
+
+        if needs_recovery:
+            log_activity('WARNING', 'rq_monitor', f'检测到调度任务异常: {recovery_reason}，开始自动恢复')
+            print(f"[RQ监控] 警告: {recovery_reason}，触发自动恢复")
 
             # 清理标记文件并触发批量调度
             rq_schedule_flag_file = '/app/data/rq_schedule_init_done'
@@ -9583,9 +9600,15 @@ def admin_copy_subscription(sub_id):
 
                     # 为新订阅创建RQ调度任务
                     try:
-                        from rq_config import schedule_subscription_task
-                        schedule_subscription_task(new_sub)
-                        app.logger.info(f"[管理员] 为用户 {user.email} 创建订阅调度任务: {new_sub.id}")
+                        from tasks import calculate_next_push_time
+                        from rq_config import schedule_subscription_push
+
+                        next_push_time = calculate_next_push_time(new_sub)
+                        if next_push_time:
+                            schedule_subscription_push(new_sub.id, next_push_time)
+                            app.logger.info(f"[管理员] 为用户 {user.email} 创建订阅调度任务: {new_sub.id}, 下次推送: {next_push_time}")
+                        else:
+                            app.logger.warning(f"[管理员] 无法计算订阅 {new_sub.id} 的下次推送时间")
                     except Exception as e:
                         app.logger.warning(f"[管理员] 创建调度任务失败: {e}")
 

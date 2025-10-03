@@ -8464,8 +8464,22 @@ def delete_user(user_id):
         if user_is_admin and admin_count <= 1:
             flash('不能删除最后一个管理员', 'admin')
             return redirect(url_for('admin_users'))
-        
-        # 先删除相关的订阅
+
+        # 获取该用户的所有订阅ID
+        user_subscriptions = Subscription.query.filter_by(user_id=user_id).all()
+        subscription_ids = [sub.id for sub in user_subscriptions]
+
+        # 先取消RQ队列中该用户所有订阅的调度任务
+        if subscription_ids:
+            from rq_config import cancel_subscription_jobs
+            for sub_id in subscription_ids:
+                try:
+                    cancel_subscription_jobs(sub_id)
+                    app.logger.info(f"[删除用户] 已取消订阅 {sub_id} 的RQ调度任务")
+                except Exception as e:
+                    app.logger.warning(f"[删除用户] 取消订阅 {sub_id} 的RQ调度任务失败: {e}")
+
+        # 删除相关的订阅
         db.session.execute(
             db.text("DELETE FROM subscription WHERE user_id = :user_id"),
             {'user_id': user_id}

@@ -236,35 +236,52 @@ def test_rq_connection():
         return {"status": "success", "time": current_time.isoformat()}
 
 def batch_push_all_users():
-    """批量推送所有用户订阅（异步任务）"""
+    """批量推送所有用户订阅（拆分为多个独立任务以支持并行处理）"""
     with app.app_context():
         try:
+            from rq_config import enqueue_job
+
             start_time = datetime.datetime.now()
-            logging.info(f"[RQ批量推送] 开始批量推送所有用户订阅")
+            logging.info(f"[RQ批量推送] 开始批量推送调度")
 
-            # 调用推送服务处理所有用户
-            results = push_service.process_user_subscriptions()
+            # 获取所有活跃用户的活跃订阅
+            subscriptions = Subscription.query.filter_by(is_active=True).join(User).filter_by(is_active=True).all()
 
-            success_count = sum(1 for r in results if r.get('success'))
-            total_articles = sum(r.get('articles_found', 0) for r in results if r.get('success'))
+            if not subscriptions:
+                info_msg = "没有活跃订阅需要推送"
+                logging.info(f"[RQ批量推送] {info_msg}")
+                return {"status": "success", "total_subscriptions": 0, "jobs_created": 0}
+
+            # 为每个订阅创建独立的推送任务
+            job_ids = []
+            for subscription in subscriptions:
+                try:
+                    job = enqueue_job(
+                        process_subscription_push,
+                        subscription.id,
+                        priority='default'
+                    )
+                    job_ids.append(job.id)
+                    logging.debug(f"[RQ批量推送] 已创建订阅 {subscription.id} 的推送任务: {job.id}")
+                except Exception as e:
+                    logging.error(f"[RQ批量推送] 创建订阅 {subscription.id} 任务失败: {e}")
 
             end_time = datetime.datetime.now()
             duration = (end_time - start_time).total_seconds()
 
-            success_msg = f'批量推送完成: 处理 {len(results)} 个用户，成功 {success_count} 个，共找到 {total_articles} 篇新文章'
+            success_msg = f'批量推送任务调度完成: 为 {len(subscriptions)} 个订阅创建了 {len(job_ids)} 个推送任务'
             log_activity('INFO', 'rq_batch_push', success_msg)
             logging.info(f"[RQ批量推送] {success_msg} (耗时: {duration:.2f}秒)")
 
             return {
                 "status": "success",
-                "total_users": len(results),
-                "success_count": success_count,
-                "total_articles": total_articles,
+                "total_subscriptions": len(subscriptions),
+                "jobs_created": len(job_ids),
                 "duration": duration
             }
 
         except Exception as e:
-            error_msg = f"批量推送失败: {str(e)}"
+            error_msg = f"批量推送调度失败: {str(e)}"
             log_activity('ERROR', 'rq_batch_push', error_msg)
             logging.error(f"[RQ批量推送] {error_msg}")
             return {"status": "error", "message": error_msg}

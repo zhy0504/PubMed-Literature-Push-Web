@@ -6,6 +6,7 @@
   <img src="https://img.shields.io/badge/License-Dual%20License-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/SQLAlchemy-3.0.5-red?style=flat" alt="SQLAlchemy">
   <img src="https://img.shields.io/badge/OpenAI-API-412991?style=flat&logo=openai&logoColor=white" alt="OpenAI">
+  <a href="https://deepwiki.com/zhy0504/PubMed-Literature-Push-Web"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
 <p align="center">

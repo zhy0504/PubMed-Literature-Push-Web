@@ -701,7 +701,7 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(128))
     is_admin = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
     
     # 推送相关字段
     push_method = db.Column(db.String(20), default='email')  # email, wechat, both
@@ -787,7 +787,7 @@ class Subscription(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     keywords = db.Column(db.String(500), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
     is_active = db.Column(db.Boolean, default=True)
     last_search = db.Column(db.DateTime)
     
@@ -901,7 +901,7 @@ class Article(db.Model):
     # AI增强字段
     abstract_cn = db.Column(db.Text)  # 中文翻译
     brief_intro = db.Column(db.Text)  # AI生成的简介（一句话总结）
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
 
 # 用户文章关联模型
 class UserArticle(db.Model):
@@ -909,7 +909,7 @@ class UserArticle(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     article_id = db.Column(db.Integer, db.ForeignKey('article.id'), nullable=False)
     subscription_id = db.Column(db.Integer, db.ForeignKey('subscription.id'), nullable=True)  # 允许为空
-    push_date = db.Column(db.DateTime, default=datetime.utcnow)
+    push_date = db.Column(db.DateTime, default=beijing_now)
     is_read = db.Column(db.Boolean, default=False)
     
     user = db.relationship('User', backref='user_articles')
@@ -919,13 +919,13 @@ class UserArticle(db.Model):
 # 系统日志模型
 class SystemLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=beijing_now)
     level = db.Column(db.String(10), nullable=False)  # INFO, WARNING, ERROR
     module = db.Column(db.String(50), nullable=False)
     message = db.Column(db.String(500), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     ip_address = db.Column(db.String(45), nullable=True)
-    
+
     user = db.relationship('User', backref='logs')
 
 # 密码重置令牌模型
@@ -933,7 +933,7 @@ class PasswordResetToken(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     token = db.Column(db.String(100), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
     expires_at = db.Column(db.DateTime, nullable=False)
     used = db.Column(db.Boolean, default=False)
     
@@ -951,7 +951,7 @@ class InviteCode(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(50), unique=True, nullable=False)
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
     expires_at = db.Column(db.DateTime, nullable=True)
     max_uses = db.Column(db.Integer, default=1)  # 最大使用次数
     used_count = db.Column(db.Integer, default=0)  # 已使用次数
@@ -983,7 +983,7 @@ class InviteCodeUsage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     invite_code_id = db.Column(db.Integer, db.ForeignKey('invite_code.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    used_at = db.Column(db.DateTime, default=datetime.utcnow)
+    used_at = db.Column(db.DateTime, default=beijing_now)
 
     invite_code = db.relationship('InviteCode', backref='usage_records')
     user = db.relationship('User', backref='invite_code_usage')
@@ -995,7 +995,7 @@ class SystemSetting(db.Model):
     value = db.Column(db.Text, nullable=False)
     description = db.Column(db.String(200), nullable=True)
     category = db.Column(db.String(50), nullable=False, default='general')
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now)
     
     @staticmethod
     def get_setting(key, default=None):
@@ -1035,7 +1035,7 @@ class MailConfig(db.Model):
     daily_limit = db.Column(db.Integer, default=100)  # 每日发送限制
     current_count = db.Column(db.Integer, default=0)  # 今日已发送数量
     last_used = db.Column(db.DateTime)  # 最后使用时间
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
     
     def can_send(self):
         """检查是否可以发送邮件"""
@@ -1068,8 +1068,8 @@ class AISetting(db.Model):
     base_url = db.Column(db.String(200), nullable=False)  # API接入点
     api_key = db.Column(db.Text, nullable=False)  # API密钥(加密存储)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now)
     
     # 关联关系
     models = db.relationship('AIModel', backref='provider', lazy=True, cascade='all, delete-orphan')
@@ -1107,7 +1107,7 @@ class AIModel(db.Model):
     model_id = db.Column(db.String(100), nullable=False)  # API标识符
     model_type = db.Column(db.String(20), nullable=False)  # query_builder, translator, general
     is_available = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
 
 # AI提示词模板表
 class AIPromptTemplate(db.Model):
@@ -1115,8 +1115,8 @@ class AIPromptTemplate(db.Model):
     template_type = db.Column(db.String(20), nullable=False)  # query_builder, translator
     prompt_content = db.Column(db.Text, nullable=False)
     is_default = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=beijing_now)
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now)
 
     @staticmethod
     def get_default_prompt(template_type):
@@ -12253,7 +12253,7 @@ def admin_mail():
                                 {% for config in configs %}
                                 <tr>
                                     <td><strong>{{ config.name }}</strong></td>
-                                    <td>{{ config.username }}</td>
+                                    <td>{{ config.from_email or config.username }}</td>
                                     <td>{{ config.smtp_server }}:{{ config.smtp_port }}</td>
                                     <td>
                                         {% if config.is_active %}

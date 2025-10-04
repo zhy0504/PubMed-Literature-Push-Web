@@ -14,6 +14,24 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+import pytz
+
+# 时区配置 - 与app.py保持一致
+DEFAULT_TIMEZONE = 'Asia/Shanghai'
+SYSTEM_TIMEZONE = os.environ.get('TZ', DEFAULT_TIMEZONE)
+
+try:
+    APP_TIMEZONE = pytz.timezone(SYSTEM_TIMEZONE)
+    print(f"使用时区: {SYSTEM_TIMEZONE}")
+except Exception as e:
+    print(f"时区配置错误 '{SYSTEM_TIMEZONE}': {e}")
+    print(f"回退到默认时区: {DEFAULT_TIMEZONE}")
+    APP_TIMEZONE = pytz.timezone(DEFAULT_TIMEZONE)
+    SYSTEM_TIMEZONE = DEFAULT_TIMEZONE
+
+def get_current_time():
+    """获取当前系统时间（使用配置的时区）"""
+    return datetime.now(APP_TIMEZONE)
 
 # 创建应用和数据库连接
 app = Flask(__name__)
@@ -37,7 +55,7 @@ class MailConfig(db.Model):
     daily_limit = db.Column(db.Integer, default=100)
     current_count = db.Column(db.Integer, default=0)
     last_used = db.Column(db.DateTime)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=get_current_time)
 
 def init_mail_configs():
     """初始化邮箱配置"""
@@ -111,7 +129,7 @@ def init_mail_configs():
                     daily_limit=config_data['daily_limit'],
                     is_active=config_data['is_active'],
                     current_count=0,
-                    created_at=datetime.utcnow()
+                    created_at=get_current_time()
                 )
                 
                 db.session.add(config)

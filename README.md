@@ -11,6 +11,8 @@
 <p align="center">
   <strong>智能的 PubMed 文献推送系统</strong><br>
   支持多邮箱轮询发送、期刊质量评估以及 AI 驱动的检索式生成和摘要翻译
+  使用deepwiki解析本项目，请点击下面的链接
+  [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/zhy0504/PubMed-Literature-Push-Web)
 </p>
 
 ---
